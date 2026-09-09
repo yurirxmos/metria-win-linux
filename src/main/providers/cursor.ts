@@ -123,13 +123,20 @@ export function parseCursorWindows(json: string): UsageWindow[] {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class CursorProvider {
   readonly id = "Cursor";
   readonly kind: ProviderKind = "Cursor";
   readonly hint = "Sign in to Cursor to make usage available.";
   private readonly store: CursorStateStore;
 
-  constructor(private readonly paths: ProviderPaths) {
+  constructor(
+    private readonly paths: ProviderPaths,
+    private readonly sleepFn: (ms: number) => Promise<void> = sleep
+  ) {
     this.store = new CursorStateStore(paths.cursorStateDb);
   }
 
@@ -142,39 +149,67 @@ export class CursorProvider {
     if (!token) throw new Error("Cursor credentials were not found.");
     if (isJwtExpired(token)) throw new Error("Sign in to Cursor again to refresh usage.");
 
-    const res = await fetch(
-      "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          "Connect-Protocol-Version": "1",
-          "User-Agent": "Metria-Electron/0.1"
-        },
-        body: JSON.stringify({ includePooledUsage: true })
+    let lastError: Error | undefined;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await fetch(
+          "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+              "Connect-Protocol-Version": "1",
+              "User-Agent": "Metria-Electron/0.1"
+            },
+            body: JSON.stringify({ includePooledUsage: true }),
+            signal: AbortSignal.timeout(10_000)
+          }
+        );
+
+        if (res.status === 401 || res.status === 403) {
+          throw new Error("Sign in to Cursor again to refresh usage.");
+        }
+        if (res.status === 429 && attempt < 2) {
+          const retryHeader = res.headers?.get?.("Retry-After");
+          const retrySec = retryHeader ? Number(retryHeader) : 2 ** (attempt + 1);
+          const retryMs = Math.min(Number.isFinite(retrySec) ? retrySec * 1000 : 2000, 30_000);
+          await this.sleepFn(retryMs);
+          continue;
+        }
+        if (!res.ok) {
+          throw new Error(
+            res.status === 429
+              ? "The provider rate limited Metria. Try again shortly."
+              : `The provider returned ${res.status}.`
+          );
+        }
+
+        const text = await res.text();
+        const windows = parseCursorWindows(text);
+        return {
+          id: this.id,
+          kind: this.kind,
+          accountLabel: null,
+          windows,
+          updatedAt: new Date().toISOString(),
+          error: windows.length === 0 ? "No usage data returned." : null,
+          available: true,
+          setupHint: ""
+        };
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (
+          lastError.message === "Sign in to Cursor again to refresh usage." ||
+          (lastError.message.startsWith("The provider returned ") &&
+            !lastError.message.includes("429"))
+        ) {
+          throw lastError;
+        }
+        if (attempt === 2) throw lastError;
       }
-    );
-
-    if (res.status === 401 || res.status === 403) {
-      throw new Error("Sign in to Cursor again to refresh usage.");
     }
-    if (!res.ok) {
-      throw new Error(`The provider returned ${res.status}.`);
-    }
-
-    const text = await res.text();
-    const windows = parseCursorWindows(text);
-    return {
-      id: this.id,
-      kind: this.kind,
-      accountLabel: null,
-      windows,
-      updatedAt: new Date().toISOString(),
-      error: windows.length === 0 ? "No usage data returned." : null,
-      available: true,
-      setupHint: ""
-    };
+    throw lastError ?? new Error("Unable to load usage.");
   }
 
   async fetchWsl(_shell: WslShell, _distro: string): Promise<ProviderUsage> {

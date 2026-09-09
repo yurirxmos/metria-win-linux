@@ -212,7 +212,7 @@ test("AntigravityProvider hasHostCredentials and fetchHost behavior", async () =
 
     const wslUsage = await provider.fetchWsl(mockWslShell, "Ubuntu");
     assert.equal(executedDistro, "Ubuntu");
-    assert.equal(executedCmd, "agy -p /usage </dev/null");
+    assert.equal(executedCmd, 'PATH="$HOME/.local/bin:$PATH" agy -p /usage </dev/null');
     assert.equal(wslUsage.id, "Antigravity");
     assert.equal(wslUsage.windows.length, 2);
   } finally {

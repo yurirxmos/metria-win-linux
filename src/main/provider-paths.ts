@@ -26,7 +26,9 @@ export function providerPaths(context: PathEnvironment): ProviderPaths {
     codexSessions: join(codexRoot, "sessions"),
     openCodeAuth: join(dataRoot, "opencode", "auth.json"),
     claudeCredentials: join(context.home, ".claude", ".credentials.json"),
-    cursorStateDb: join(configRoot, "Cursor", "User", "globalStorage", "state.vscdb"),
+    cursorStateDb: context.platform === "darwin"
+      ? join(context.home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb")
+      : join(configRoot, "Cursor", "User", "globalStorage", "state.vscdb"),
     antigravityBin: context.platform === "win32"
       ? join(context.home, ".local", "bin", "agy.cmd")
       : join(context.home, ".local", "bin", "agy")

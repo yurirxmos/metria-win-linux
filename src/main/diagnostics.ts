@@ -11,13 +11,22 @@ export interface ReconnectResult {
   message: string;
 }
 
-export function buildReconnectCommand(rawId: string): ReconnectResult {
+export function buildReconnectCommand(
+  rawId: string,
+  platform: NodeJS.Platform = process.platform
+): ReconnectResult {
   const parsed = parseProviderId(String(rawId));
   let command = "";
   let message = "";
 
   if (parsed.kind === "Claude") {
-    command = parsed.slug ? `CLAUDE_CONFIG_DIR=~/.claude-${parsed.slug} claude auth login` : "claude auth login";
+    if (parsed.slug) {
+      command = platform === "win32"
+        ? `$env:CLAUDE_CONFIG_DIR="$HOME\\.claude-${parsed.slug}"; claude auth login`
+        : `CLAUDE_CONFIG_DIR=~/.claude-${parsed.slug} claude auth login`;
+    } else {
+      command = "claude auth login";
+    }
     message = `Run \`${command}\` in your terminal, then refresh Metria.`;
   } else if (parsed.kind === "Codex") {
     command = "codex login";
@@ -48,6 +57,9 @@ export function checkAgyVersionOrHelp(
       windowsHide: true,
       shell: isBatch
     });
+    if (ver.error) {
+      return { error: ver.error.message };
+    }
     if (ver.status === 0 && ver.stdout?.trim()) {
       return { version: ver.stdout.trim() };
     }
@@ -57,6 +69,9 @@ export function checkAgyVersionOrHelp(
       windowsHide: true,
       shell: isBatch
     });
+    if (help.error) {
+      return { error: help.error.message };
+    }
     if (help.status === 0 && help.stdout?.trim()) {
       return { help: true };
     }

@@ -31,3 +31,8 @@ test("resolves Windows paths including Cursor DB and Antigravity binary", () => 
   assert.equal(paths.antigravityBin, join("C:\\Users\\User", ".local", "bin", "agy.cmd"));
 });
 
+test("resolves macOS paths for Cursor DB", () => {
+  const paths = providerPaths({ platform: "darwin", home: "/Users/user", env: {} });
+  assert.equal(paths.cursorStateDb, "/Users/user/Library/Application Support/Cursor/User/globalStorage/state.vscdb");
+});
+

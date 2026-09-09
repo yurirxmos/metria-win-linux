@@ -17,7 +17,7 @@ let tray: Tray | undefined;
 let refreshTimer: NodeJS.Timeout | undefined;
 let isQuitting = false;
 let lastUsage: Awaited<ReturnType<ProviderService["fetch"]>> = [];
-let badgeTrays = new Map<ProviderKind, Tray>();
+let badgeTrays = new Map<string, Tray>();
 let updateState: "idle" | "downloaded" = "idle";
 let updateTimer: NodeJS.Timeout | undefined;
 let pendingOpenSettings = false;
@@ -167,7 +167,11 @@ export function visibleProviders(
   providers: typeof lastUsage = lastUsage,
   enabled: string[] = settings.load().enabledProviders
 ): typeof lastUsage {
-  return providers.filter((provider) => enabled.includes(provider.id) || enabled.includes(provider.kind));
+  return providers.filter(
+    (provider) =>
+      enabled.includes(provider.id) ||
+      (provider.id === provider.kind && enabled.includes(provider.kind))
+  );
 }
 
 function createCardWindow(): BrowserWindow {
@@ -276,12 +280,16 @@ function trayMenuIcon(name: string): Electron.NativeImage | undefined {
   return path ? nativeImage.createFromPath(path).resize({ width: 16, height: 16 }) : undefined;
 }
 function usageRows(providers: typeof lastUsage): UsageRow[] {
-  return visibleProviders(providers).filter((provider) => provider.windows[0]).map((provider) => ({
-    name: providerShortLabel(provider.kind),
-    percent: Math.round(Math.max(0, Math.min(100, provider.windows[0]!.percent))),
-    reset: formatReset(provider.windows[0]!.resetDate),
-    logo: PROVIDER_LOGOS[provider.kind]
-  }));
+  return visibleProviders(providers).filter((provider) => provider.windows[0]).map((provider) => {
+    const parsed = parseProviderId(provider.id || provider.kind);
+    const name = parsed.slug ? `${providerShortLabel(provider.kind)} (${parsed.slug})` : providerShortLabel(provider.kind);
+    return {
+      name,
+      percent: Math.round(Math.max(0, Math.min(100, provider.windows[0]!.percent))),
+      reset: formatReset(provider.windows[0]!.resetDate),
+      logo: PROVIDER_LOGOS[provider.kind]
+    };
+  });
 }
 function buildTrayMenu(rows: UsageRow[]): Menu {
   const template: Electron.MenuItemConstructorOptions[] = rows.length
@@ -392,13 +400,17 @@ function badgeTemplate(): Electron.MenuItemConstructorOptions[] {
 }
 function updateBadges(providers: typeof lastUsage): void {
   const active = visibleProviders(providers).filter((provider) => provider.available);
-  for (const [kind, badge] of badgeTrays) {
-    if (!active.some((provider) => provider.kind === kind)) { badge.destroy(); badgeTrays.delete(kind); }
+  for (const [id, badge] of badgeTrays) {
+    if (!active.some((provider) => (provider.id || provider.kind) === id)) {
+      badge.destroy();
+      badgeTrays.delete(id);
+    }
   }
   for (const provider of active) {
+    const id = provider.id || provider.kind;
     const { percent, reset } = badgeStatus(provider);
-    const tooltip = `${providerShortLabel(provider.kind)} — ${percent}%${reset ? ` · ${reset}` : ""}`;
-    const existing = badgeTrays.get(provider.kind);
+    const tooltip = `${parseProviderId(id).displayName} — ${percent}%${reset ? ` · ${reset}` : ""}`;
+    const existing = badgeTrays.get(id);
     if (existing) {
       existing.setToolTip(tooltip);
       continue;
@@ -408,7 +420,7 @@ function updateBadges(providers: typeof lastUsage): void {
     badge.setToolTip(tooltip);
     badge.setContextMenu(Menu.buildFromTemplate(badgeTemplate()));
     badge.on("click", showDashboard);
-    badgeTrays.set(provider.kind, badge);
+    badgeTrays.set(id, badge);
   }
 }
 
@@ -445,13 +457,38 @@ function cachePath(): string { return join(app.getPath("userData"), "usage-cache
 function loadCachedUsage(): ProviderUsage[] {
   try {
     const parsed = JSON.parse(readFileSync(cachePath(), "utf8")) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((value): value is ProviderUsage => typeof value === "object" && value !== null && isProviderKind((value as ProviderUsage).kind) && Array.isArray((value as ProviderUsage).windows)).map((value) => ({ ...value, error: null, available: true })) : [];
-  } catch { return []; }
+    return Array.isArray(parsed)
+      ? parsed
+          .filter(
+            (value): value is ProviderUsage =>
+              typeof value === "object" &&
+              value !== null &&
+              isProviderKind((value as ProviderUsage).kind) &&
+              Array.isArray((value as ProviderUsage).windows)
+          )
+          .map((value) => ({
+            ...value,
+            id: (value as any).id || (value as ProviderUsage).kind,
+            error: null,
+            available: true
+          }))
+      : [];
+  } catch {
+    return [];
+  }
 }
 function saveCachedUsage(values: ProviderUsage[]): void {
   try {
     mkdirSync(join(app.getPath("userData")), { recursive: true });
-    const cached = values.filter((value) => value.windows.length).map(({ kind, accountLabel, windows, updatedAt }) => ({ kind, accountLabel, windows, updatedAt }));
+    const cached = values
+      .filter((value) => value.windows.length)
+      .map((value) => ({
+        id: value.id || value.kind,
+        kind: value.kind,
+        accountLabel: value.accountLabel,
+        windows: value.windows,
+        updatedAt: value.updatedAt
+      }));
     const temporary = `${cachePath()}.tmp`;
     writeFileSync(temporary, JSON.stringify(cached, null, 2), { mode: 0o600 });
     renameSync(temporary, cachePath());

@@ -45,6 +45,14 @@ test("buildReconnectCommand returns correct command and message for all provider
     "Run `CLAUDE_CONFIG_DIR=~/.claude-work claude auth login` in your terminal, then refresh Metria."
   );
 
+  // Claude profile on Windows
+  const claudeWorkWin = buildReconnectCommand("Claude-work", "win32");
+  assert.equal(claudeWorkWin.command, '$env:CLAUDE_CONFIG_DIR="$HOME\\.claude-work"; claude auth login');
+  assert.equal(
+    claudeWorkWin.message,
+    'Run `$env:CLAUDE_CONFIG_DIR="$HOME\\.claude-work"; claude auth login` in your terminal, then refresh Metria.'
+  );
+
   // Codex
   const codex = buildReconnectCommand("Codex");
   assert.equal(codex.command, "codex login");
@@ -290,6 +298,12 @@ test("checkAgyVersionOrHelp invokes spawn and handles success and fallbacks", ()
     throw new Error("spawn ENOENT");
   }) as any);
   assert.match(resThrow.error ?? "", /spawn ENOENT/);
+
+  // Returns error object on spawn failure
+  const resSpawnError = checkAgyVersionOrHelp("dummy", (() => ({
+    error: new Error("spawn EINVAL")
+  })) as any);
+  assert.equal(resSpawnError.error, "spawn EINVAL");
 });
 
 test("cache lookup helper prefers exact id and avoids profile collision", () => {

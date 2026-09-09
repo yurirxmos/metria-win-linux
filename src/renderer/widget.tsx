@@ -107,7 +107,10 @@ function Widget(): JSX.Element {
   };
   const visible = (usage.data ?? []).filter((provider) => {
     if (!settings.data) return true;
-    return settings.data.enabledProviders.includes(provider.id) || settings.data.enabledProviders.includes(provider.kind);
+    return (
+      settings.data.enabledProviders.includes(provider.id) ||
+      (provider.id === provider.kind && settings.data.enabledProviders.includes(provider.kind))
+    );
   });
   // Keep provider items mounted while auto-hide is active so the rail remains
   // discoverable and can recover even when a window manager misses hover events.

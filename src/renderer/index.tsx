@@ -298,7 +298,7 @@ function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
             const parsed = parseProviderId(provider.id || provider.kind);
             const enabled = settingsData ? (
               settingsData.enabledProviders.includes(provider.id) ||
-              settingsData.enabledProviders.includes(provider.kind)
+              (provider.id === provider.kind && settingsData.enabledProviders.includes(provider.kind))
             ) : true;
             const hidden = settingsData?.hiddenUsageWindowTitles[provider.id] ?? settingsData?.hiddenUsageWindowTitles[provider.kind] ?? [];
             const titles = WINDOW_TITLES[provider.kind] ?? [];
@@ -408,7 +408,7 @@ function Dashboard(): JSX.Element {
         {(usage.data ?? []).map((provider) => {
           const enabled = settings.data ? (
             settings.data.enabledProviders.includes(provider.id) ||
-            settings.data.enabledProviders.includes(provider.kind)
+            (provider.id === provider.kind && settings.data.enabledProviders.includes(provider.kind))
           ) : true;
           const hiddenWindows = settings.data?.hiddenUsageWindowTitles[provider.id] ?? settings.data?.hiddenUsageWindowTitles[provider.kind] ?? [];
           return (

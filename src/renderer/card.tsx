@@ -61,7 +61,7 @@ function Card(): JSX.Element {
   const visible = (usage.data ?? []).filter((candidate) =>
     settings.data ? (
       settings.data.enabledProviders.includes(candidate.id) ||
-      settings.data.enabledProviders.includes(candidate.kind)
+      (candidate.id === candidate.kind && settings.data.enabledProviders.includes(candidate.kind))
     ) : true
   );
   const provider = (payload !== null && payload.index !== undefined && visible[payload.index])

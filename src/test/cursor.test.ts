@@ -260,3 +260,121 @@ test("CursorProvider error handling", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("CursorProvider retries on HTTP 429 and succeeds", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cursor-retry-test-"));
+  const dbPath = join(dir, "state.vscdb");
+  const validPayload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url");
+  const validToken = `header.${validPayload}.sig`;
+
+  const db = new DatabaseSync(dbPath);
+  db.exec("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT);");
+  db.exec(`INSERT INTO ItemTable (key, value) VALUES ('cursorAuth/accessToken', '${validToken}');`);
+  db.close();
+
+  const fakePaths: ProviderPaths = {
+    codexAuth: "",
+    codexSessions: "",
+    openCodeAuth: "",
+    claudeCredentials: "",
+    cursorStateDb: dbPath,
+    antigravityBin: ""
+  };
+
+  const sleepCalls: number[] = [];
+  const mockSleep = async (ms: number) => {
+    sleepCalls.push(ms);
+  };
+
+  const provider = new CursorProvider(fakePaths, mockSleep);
+
+  const originalFetch = globalThis.fetch;
+  let attempts = 0;
+  try {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      attempts++;
+      assert.ok(init?.signal, "Expected signal to be present");
+      if (attempts === 1) {
+        return {
+          ok: false,
+          status: 429,
+          headers: new Headers({ "Retry-After": "3" }),
+          text: async () => "Rate limited"
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          planUsage: { autoPercentUsed: 45 },
+          billingCycleEnd: "1725667200000"
+        })
+      } as Response;
+    }) as typeof fetch;
+
+    const usage = await provider.fetchHost();
+    assert.equal(attempts, 2);
+    assert.equal(sleepCalls.length, 1);
+    assert.equal(sleepCalls[0], 3000);
+    assert.equal(usage.windows[0].percent, 45);
+  } finally {
+    globalThis.fetch = originalFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CursorProvider exhausts 3 attempts on HTTP 429 and throws rate limit error", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cursor-429-fail-test-"));
+  const dbPath = join(dir, "state.vscdb");
+  const validPayload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url");
+  const validToken = `header.${validPayload}.sig`;
+
+  const db = new DatabaseSync(dbPath);
+  db.exec("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT);");
+  db.exec(`INSERT INTO ItemTable (key, value) VALUES ('cursorAuth/accessToken', '${validToken}');`);
+  db.close();
+
+  const fakePaths: ProviderPaths = {
+    codexAuth: "",
+    codexSessions: "",
+    openCodeAuth: "",
+    claudeCredentials: "",
+    cursorStateDb: dbPath,
+    antigravityBin: ""
+  };
+
+  const sleepCalls: number[] = [];
+  const mockSleep = async (ms: number) => {
+    sleepCalls.push(ms);
+  };
+
+  const provider = new CursorProvider(fakePaths, mockSleep);
+
+  const originalFetch = globalThis.fetch;
+  let attempts = 0;
+  try {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      attempts++;
+      assert.ok(init?.signal, "Expected signal to be present");
+      return {
+        ok: false,
+        status: 429,
+        headers: new Headers(),
+        text: async () => "Rate limited"
+      } as unknown as Response;
+    }) as typeof fetch;
+
+    await assert.rejects(
+      async () => provider.fetchHost(),
+      { message: "The provider rate limited Metria. Try again shortly." }
+    );
+    assert.equal(attempts, 3);
+    assert.equal(sleepCalls.length, 2);
+    assert.equal(sleepCalls[0], 2000); // 2 ** 1 * 1000
+    assert.equal(sleepCalls[1], 4000); // 2 ** 2 * 1000
+  } finally {
+    globalThis.fetch = originalFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
