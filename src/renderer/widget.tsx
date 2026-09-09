@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { clampPercent, DEFAULT_WIDGET_Y_OFFSET, PROVIDER_LOGOS, WIDGET_ITEM_HEIGHT } from "../shared/types";
+import { clampPercent, DEFAULT_WIDGET_Y_OFFSET, parseProviderId, PROVIDER_LOGOS, WIDGET_ITEM_HEIGHT } from "../shared/types";
 import type { ProviderKind, ProviderUsage } from "../shared/types";
 import "./app.css";
 
@@ -21,7 +21,17 @@ function Ring({ provider, alert }: { provider: ProviderUsage; alert: { enabled: 
   const clamped = clampPercent(primary(provider));
   const r = 17;
   const c = 2 * Math.PI * r;
-  const stroke = alert.enabled && clamped >= alert.criticalThreshold ? alert.criticalColor : alert.enabled && clamped >= alert.warningThreshold ? alert.warningColor : alert.enabled && clamped >= alert.cautionThreshold ? alert.cautionColor : provider.kind === "Codex" ? "url(#codex-ring)" : ACCENT[provider.kind];
+  const stroke = alert.enabled && clamped >= alert.criticalThreshold
+    ? alert.criticalColor
+    : alert.enabled && clamped >= alert.warningThreshold
+      ? alert.warningColor
+      : alert.enabled && clamped >= alert.cautionThreshold
+        ? alert.cautionColor
+        : provider.kind === "Codex"
+          ? "url(#codex-ring)"
+          : provider.kind === "Cursor"
+            ? "url(#cursor-ring)"
+            : ACCENT[provider.kind];
   return (
     <span className="relative block h-[38px] w-[38px]">
       <svg className="absolute inset-0" width="38" height="38" viewBox="0 0 38 38">
@@ -30,6 +40,14 @@ function Ring({ provider, alert }: { provider: ProviderUsage; alert: { enabled: 
             <linearGradient id="codex-ring" x1="0" y1="0" x2="1" y2="1">
               <stop offset="0" stopColor="#0a84ff" />
               <stop offset="1" stopColor="#bf5af2" />
+            </linearGradient>
+          </defs>
+        )}
+        {provider.kind === "Cursor" && (
+          <defs>
+            <linearGradient id="cursor-ring" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stopColor="#8e8e93" />
+              <stop offset="1" stopColor="#ffffff" />
             </linearGradient>
           </defs>
         )}
@@ -87,7 +105,10 @@ function Widget(): JSX.Element {
       void window.metria.setWidgetYOffset(value).then((settings) => { offsetRef.current = settings.widgetYOffset; });
     });
   };
-  const visible = (usage.data ?? []).filter((provider) => settings.data?.enabledProviders.includes(provider.kind));
+  const visible = (usage.data ?? []).filter((provider) => {
+    if (!settings.data) return true;
+    return settings.data.enabledProviders.includes(provider.id) || settings.data.enabledProviders.includes(provider.kind);
+  });
   // Keep provider items mounted while auto-hide is active so the rail remains
   // discoverable and can recover even when a window manager misses hover events.
   const displayed = visible;
@@ -124,21 +145,25 @@ function Widget(): JSX.Element {
     <main className={`notch-rail relative flex h-full w-full select-none overflow-hidden transition-opacity duration-200 ${vertical ? "flex-col py-3" : "flex-row px-3"} cursor-grab active:cursor-grabbing notch-${position}`} style={{ opacity: (settings.data?.widgetOpacity ?? 1) * (autoHide && !hovered ? 0.55 : 1) }} onContextMenu={(event) => { event.preventDefault(); void window.metria.openWidgetMenu(); }} onMouseEnter={() => setHovered(true)} onMouseMove={() => setHovered(true)} onMouseLeave={() => setHovered(false)} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
       {autoHide && !hovered && <span className="notch-hidden-hint absolute inset-0 flex items-center justify-center text-xs" aria-label="Hover to open widget">{position === "right" ? "<" : position === "left" ? ">" : position === "top" ? "v" : "^"}</span>}
       <section className={`notch-provider-list flex min-h-0 min-w-0 flex-1 items-center justify-center ${vertical ? "flex-col" : "flex-row"}`}>
-        {displayed.map((provider, index) => (
-          <div
-            key={provider.kind}
-            data-index={index}
-            className={`notch-provider-item flex shrink-0 cursor-pointer items-center justify-center gap-[3px] ${vertical ? "w-16 flex-col" : "h-16 flex-col"} ${size === "small" ? "scale-90" : size === "large" ? "scale-110" : ""}`}
-            style={{ width: vertical ? 64 : WIDGET_ITEM_HEIGHT, height: vertical ? WIDGET_ITEM_HEIGHT : 64 }}
-            onClick={() => { if (!moved.current) void window.metria.openDashboard(); }}
-            onMouseEnter={() => { void window.metria.setProviderHover(index); }}
-          >
-            <Ring provider={provider} alert={settings.data?.alerts ?? { enabled: true, cautionThreshold: 40, warningThreshold: 65, criticalThreshold: 85, cautionColor: "#ffd60a", warningColor: "#ff9f0a", criticalColor: "#ff453a" }} />
-            <span className="notch-provider-percent text-[11px] leading-none text-white">
-              {Math.round(clampPercent(primary(provider)))}%
-            </span>
-          </div>
-        ))}
+        {displayed.map((provider, index) => {
+          const parsed = parseProviderId(provider.id || provider.kind);
+          return (
+            <div
+              key={provider.id || provider.kind}
+              data-index={index}
+              title={parsed.displayName}
+              className={`notch-provider-item flex shrink-0 cursor-pointer items-center justify-center gap-[3px] ${vertical ? "w-16 flex-col" : "h-16 flex-col"} ${size === "small" ? "scale-90" : size === "large" ? "scale-110" : ""}`}
+              style={{ width: vertical ? 64 : WIDGET_ITEM_HEIGHT, height: vertical ? WIDGET_ITEM_HEIGHT : 64 }}
+              onClick={() => { if (!moved.current) void window.metria.openDashboard(); }}
+              onMouseEnter={() => { void window.metria.setProviderHover(index); }}
+            >
+              <Ring provider={provider} alert={settings.data?.alerts ?? { enabled: true, cautionThreshold: 40, warningThreshold: 65, criticalThreshold: 85, cautionColor: "#ffd60a", warningColor: "#ff9f0a", criticalColor: "#ff453a" }} />
+              <span className="notch-provider-percent text-[11px] leading-none text-white">
+                {Math.round(clampPercent(primary(provider)))}%
+              </span>
+            </div>
+          );
+        })}
       </section>
     </main>
   );

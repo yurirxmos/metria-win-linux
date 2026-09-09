@@ -1,7 +1,7 @@
 import { useEffect, useState, type JSX } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
-import { clampPercent, DEFAULT_REFRESH_INTERVAL_SECONDS, gaugeColor, PROVIDER_LOGOS, statusDotColor } from "../shared/types";
+import { clampPercent, DEFAULT_REFRESH_INTERVAL_SECONDS, gaugeColor, parseProviderId, PROVIDER_LOGOS, statusDotColor } from "../shared/types";
 import type { AppSettings, ProviderKind, ProviderSourceChoice, ProviderUsage, UsageWindow } from "../shared/types";
 import "./app.css";
 
@@ -57,15 +57,16 @@ function UsageRow({ window: row, alerts }: { window: UsageWindow; alerts?: AppSe
 }
 
 function ProviderCard({ provider, enabled, showAccount, hiddenWindows, alerts, onStatus }: { provider: ProviderUsage; enabled: boolean; showAccount: boolean; hiddenWindows: string[]; alerts?: AppSettings["alerts"]; onStatus: (message: string) => void }): JSX.Element {
+  const parsed = parseProviderId(provider.id || provider.kind);
   const setEnabled = useMutation({
-    mutationFn: (value: boolean) => window.metria.setProviderEnabled(provider.kind, value),
+    mutationFn: (value: boolean) => window.metria.setProviderEnabled(provider.id || provider.kind, value),
     onSuccess: (settings) => {
       queryClient.setQueryData(["settings"], settings);
       void queryClient.invalidateQueries({ queryKey: ["usage"] });
     }
   });
   const setup = useMutation({
-    mutationFn: () => window.metria.reconnect(provider.kind),
+    mutationFn: () => window.metria.reconnect(provider.id || provider.kind),
     onSuccess: (result) => onStatus(result.message)
   });
   const pending = setEnabled.isPending || setup.isPending;
@@ -79,7 +80,7 @@ function ProviderCard({ provider, enabled, showAccount, hiddenWindows, alerts, o
       <div className="flex items-center justify-between gap-[18px]">
         <div className="flex items-center gap-2.5">
           <img className="h-[22px] w-[22px] object-contain" src={`./${PROVIDER_LOGOS[provider.kind]}`} alt="" />
-           <h2 className="m-0 text-xl font-semibold">{provider.kind}</h2>
+           <h2 className="m-0 text-xl font-semibold">{parsed.displayName}</h2>
            {showAccount && provider.accountLabel && <span className="text-xs text-mute">{provider.accountLabel}</span>}
           <span className="h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: statusDotColor(provider.error !== null) }} />
         </div>
@@ -103,7 +104,7 @@ function ProviderCard({ provider, enabled, showAccount, hiddenWindows, alerts, o
 function SourceChoiceModal(): JSX.Element {
   const sources = useProviderSources();
   const choice = useMutation({
-    mutationFn: (variables: { kind: ProviderKind; source: ProviderSourceChoice }) => window.metria.setProviderSource(variables.kind, variables.source),
+    mutationFn: (variables: { kind: ProviderKind | string; source: ProviderSourceChoice }) => window.metria.setProviderSource(variables.kind, variables.source),
     onSuccess: (next) => {
       queryClient.setQueryData(["settings"], next);
       void queryClient.invalidateQueries({ queryKey: SOURCES_KEY });
@@ -117,25 +118,29 @@ function SourceChoiceModal(): JSX.Element {
       <div role="dialog" aria-modal="true" aria-label="Provider data source" className="max-h-[85vh] w-[min(560px,100%)] overflow-y-auto bg-surface p-6 shadow-2xl">
         <h2 className="m-0 text-2xl font-semibold tracking-[-0.05em]">Where is your provider data?</h2>
         <p className="m-0 mt-3 leading-relaxed text-dim">Metria found the same provider here in Windows and inside WSL. Pick which data to track.</p>
-        {pending.map((info) => (
-          <section key={info.kind} className="mt-6 border-t border-line pt-4">
-            <h3 className="m-0 text-lg font-semibold">{info.kind}</h3>
-            <div className="mt-3 flex flex-wrap gap-2.5">
-              {info.host && (
-                <button type="button" className="cursor-pointer border border-line2 bg-transparent px-4 py-2 text-[#d8d8dc] disabled:opacity-55"
-                  onClick={() => choice.mutate({ kind: info.kind, source: { location: "host" } })} disabled={choice.isPending}>
-                  Windows
-                </button>
-              )}
-              {info.wsl.filter((entry) => entry.present).map((entry) => (
-                <button key={entry.distro} type="button" className="cursor-pointer border border-line2 bg-transparent px-4 py-2 text-[#d8d8dc] disabled:opacity-55"
-                  onClick={() => choice.mutate({ kind: info.kind, source: { location: "wsl", distro: entry.distro } })} disabled={choice.isPending}>
-                  WSL: {entry.distro}
-                </button>
-              ))}
-            </div>
-          </section>
-        ))}
+        {pending.map((info) => {
+          const infoId = info.id ?? info.kind;
+          const parsed = parseProviderId(infoId);
+          return (
+            <section key={infoId} className="mt-6 border-t border-line pt-4">
+              <h3 className="m-0 text-lg font-semibold">{parsed.displayName}</h3>
+              <div className="mt-3 flex flex-wrap gap-2.5">
+                {info.host && (
+                  <button type="button" className="cursor-pointer border border-line2 bg-transparent px-4 py-2 text-[#d8d8dc] disabled:opacity-55"
+                    onClick={() => choice.mutate({ kind: infoId, source: { location: "host" } })} disabled={choice.isPending}>
+                    Windows
+                  </button>
+                )}
+                {info.wsl.filter((entry) => entry.present).map((entry) => (
+                  <button key={entry.distro} type="button" className="cursor-pointer border border-line2 bg-transparent px-4 py-2 text-[#d8d8dc] disabled:opacity-55"
+                    onClick={() => choice.mutate({ kind: infoId, source: { location: "wsl", distro: entry.distro } })} disabled={choice.isPending}>
+                    WSL: {entry.distro}
+                  </button>
+                ))}
+              </div>
+            </section>
+          );
+        })}
       </div>
     </div>
   );
@@ -179,13 +184,13 @@ function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
     onSuccess: (next) => { queryClient.setQueryData(["settings"], next); void queryClient.invalidateQueries({ queryKey: ["usage"] }); }
   });
   const setWindowVisible = useMutation({
-    mutationFn: (value: { kind: ProviderKind; title: string; visible: boolean }) => window.metria.setWindowVisible(value.kind, value.title, value.visible),
+    mutationFn: (value: { kind: ProviderKind | string; title: string; visible: boolean }) => window.metria.setWindowVisible(value.kind, value.title, value.visible),
     onSuccess: (next) => queryClient.setQueryData(["settings"], next)
   });
-  const diagnose = useMutation({ mutationFn: (kind: ProviderKind) => window.metria.diagnose(kind), onSuccess: (message) => setNotice(message) });
+  const diagnose = useMutation({ mutationFn: (kind: ProviderKind | string) => window.metria.diagnose(kind), onSuccess: (message) => setNotice(message) });
   const providerSources = useProviderSources();
   const setProviderSource = useMutation({
-    mutationFn: (variables: { kind: ProviderKind; source: ProviderSourceChoice }) => window.metria.setProviderSource(variables.kind, variables.source),
+    mutationFn: (variables: { kind: ProviderKind | string; source: ProviderSourceChoice }) => window.metria.setProviderSource(variables.kind, variables.source),
     onSuccess: (next) => {
       queryClient.setQueryData(["settings"], next);
       void queryClient.invalidateQueries({ queryKey: SOURCES_KEY });
@@ -265,33 +270,42 @@ function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
         {wslDetected && sourceOptions.length > 0 && (
           <section className="mt-6">
             <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">Provider data source</h3>
-            {sourceOptions.map((entry) => (
-              <div key={entry.kind} className="mt-2.5 flex items-center gap-2.5">
-                <label className="min-w-24 text-dim" htmlFor={`source-${entry.kind}`}>{entry.kind}</label>
-                <select id={`source-${entry.kind}`} className="cursor-pointer border border-line2 bg-surface px-2.5 py-1.5 text-fg"
-                  value={sourceValue(entry.source)}
-                  onChange={(event) => setProviderSource.mutate({ kind: entry.kind, source: parseSource(event.target.value) })}
-                  disabled={setProviderSource.isPending}
-                >
-                  <option value="host">Windows</option>
-                  {entry.wsl.filter((candidate) => candidate.present).map((candidate) => (
-                    <option key={candidate.distro} value={`wsl:${candidate.distro}`}>WSL: {candidate.distro}</option>
-                  ))}
-                </select>
-              </div>
-            ))}
+            {sourceOptions.map((entry) => {
+              const entryId = entry.id ?? entry.kind;
+              const parsed = parseProviderId(entryId);
+              return (
+                <div key={entryId} className="mt-2.5 flex items-center gap-2.5">
+                  <label className="min-w-24 text-dim" htmlFor={`source-${entryId}`}>{parsed.displayName}</label>
+                  <select id={`source-${entryId}`} className="cursor-pointer border border-line2 bg-surface px-2.5 py-1.5 text-fg"
+                    value={sourceValue(entry.source)}
+                    onChange={(event) => setProviderSource.mutate({ kind: entryId, source: parseSource(event.target.value) })}
+                    disabled={setProviderSource.isPending}
+                  >
+                    <option value="host">Windows</option>
+                    {entry.wsl.filter((candidate) => candidate.present).map((candidate) => (
+                      <option key={candidate.distro} value={`wsl:${candidate.distro}`}>WSL: {candidate.distro}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
           </section>
         )}
 
         <section className="mt-6">
           <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">Providers</h3>
           {usageData.map((provider) => {
-            const enabled = settingsData?.enabledProviders.includes(provider.kind) ?? true;
-            const hidden = settingsData?.hiddenUsageWindowTitles[provider.kind] ?? [];
-            return <article key={provider.kind} className="mt-3 border-t border-line pt-3">
-              <div className="flex items-center justify-between gap-3"><strong>{provider.kind}</strong><label className="flex items-center gap-2 text-dim"><input type="checkbox" checked={enabled} onChange={(event) => void window.metria.setProviderEnabled(provider.kind, event.target.checked).then((next) => queryClient.setQueryData(["settings"], next))} /> Use this provider</label></div>
-              <div className="mt-2 grid gap-2">{WINDOW_TITLES[provider.kind].map((title) => <label key={title} className="flex items-center gap-2 text-sm text-dim"><input type="checkbox" checked={!hidden.includes(title)} onChange={(event) => setWindowVisible.mutate({ kind: provider.kind, title, visible: event.target.checked })} /> Show {title}</label>)}</div>
-              <div className="mt-3 flex flex-wrap gap-2"><button type="button" className="border border-line2 bg-transparent px-3 py-1.5 text-fg" onClick={() => void diagnose.mutate(provider.kind)}>Diagnose</button><button type="button" className="border border-line2 bg-transparent px-3 py-1.5 text-fg" onClick={() => void window.metria.reconnect(provider.kind).then((result) => setNotice(result.message))}>Reconnect</button></div>
+            const parsed = parseProviderId(provider.id || provider.kind);
+            const enabled = settingsData ? (
+              settingsData.enabledProviders.includes(provider.id) ||
+              settingsData.enabledProviders.includes(provider.kind)
+            ) : true;
+            const hidden = settingsData?.hiddenUsageWindowTitles[provider.id] ?? settingsData?.hiddenUsageWindowTitles[provider.kind] ?? [];
+            const titles = WINDOW_TITLES[provider.kind] ?? [];
+            return <article key={provider.id || provider.kind} className="mt-3 border-t border-line pt-3">
+              <div className="flex items-center justify-between gap-3"><strong>{parsed.displayName}</strong><label className="flex items-center gap-2 text-dim"><input type="checkbox" checked={enabled} onChange={(event) => void window.metria.setProviderEnabled(provider.id || provider.kind, event.target.checked).then((next) => queryClient.setQueryData(["settings"], next))} /> Use this provider</label></div>
+              <div className="mt-2 grid gap-2">{titles.map((title) => <label key={title} className="flex items-center gap-2 text-sm text-dim"><input type="checkbox" checked={!hidden.includes(title)} onChange={(event) => setWindowVisible.mutate({ kind: provider.id || provider.kind, title, visible: event.target.checked })} /> Show {title}</label>)}</div>
+              <div className="mt-3 flex flex-wrap gap-2"><button type="button" className="border border-line2 bg-transparent px-3 py-1.5 text-fg" onClick={() => void diagnose.mutate(provider.id || provider.kind)}>Diagnose</button><button type="button" className="border border-line2 bg-transparent px-3 py-1.5 text-fg" onClick={() => void window.metria.reconnect(provider.id || provider.kind).then((result) => setNotice(result.message))}>Reconnect</button></div>
               {provider.error && <p className="mt-2 text-accent">{provider.error}</p>}
               <p className="mt-2 text-xs text-dim">{provider.updatedAt ? `Last update: ${new Date(provider.updatedAt).toLocaleString()}` : provider.setupHint}</p>
             </article>;
@@ -391,9 +405,24 @@ function Dashboard(): JSX.Element {
       </header>
       <p className="mb-[30px] mt-[18px] text-dim" role="status">{status}</p>
       <section aria-live="polite">
-        {(usage.data ?? []).map((provider) => (
-          <ProviderCard key={provider.kind} provider={provider} enabled={settings.data?.enabledProviders.includes(provider.kind) ?? true} showAccount={settings.data?.showAccountLabels ?? true} hiddenWindows={settings.data?.hiddenUsageWindowTitles[provider.kind] ?? []} alerts={settings.data?.alerts} onStatus={setStatus} />
-        ))}
+        {(usage.data ?? []).map((provider) => {
+          const enabled = settings.data ? (
+            settings.data.enabledProviders.includes(provider.id) ||
+            settings.data.enabledProviders.includes(provider.kind)
+          ) : true;
+          const hiddenWindows = settings.data?.hiddenUsageWindowTitles[provider.id] ?? settings.data?.hiddenUsageWindowTitles[provider.kind] ?? [];
+          return (
+            <ProviderCard
+              key={provider.id || provider.kind}
+              provider={provider}
+              enabled={enabled}
+              showAccount={settings.data?.showAccountLabels ?? true}
+              hiddenWindows={hiddenWindows}
+              alerts={settings.data?.alerts}
+              onStatus={setStatus}
+            />
+          );
+        })}
       </section>
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {needsSourceChoice && <SourceChoiceModal />}

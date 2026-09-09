@@ -1,7 +1,7 @@
 import { useEffect, useState, type JSX } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { CARD_WIDTH, clampPercent, gaugeColor, PROVIDER_LOGOS, providerShortLabel, statusDotColor } from "../shared/types";
+import { CARD_WIDTH, clampPercent, gaugeColor, parseProviderId, PROVIDER_LOGOS, statusDotColor } from "../shared/types";
 import type { AppSettings, CardShowPayload, ProviderUsage, UsageWindow } from "../shared/types";
 import "./app.css";
 
@@ -58,8 +58,19 @@ function Card(): JSX.Element {
     window.metria.onSettingsChanged(() => { void queryClient.invalidateQueries({ queryKey: ["settings"] }); });
     window.metria.onUsageChanged(() => { void queryClient.invalidateQueries({ queryKey: ["usage"] }); });
   }, []);
-  const provider = usage.data?.find((candidate) => candidate.kind === payload?.kind);
-  const visibleWindows = provider?.windows.filter((row) => !settings.data?.hiddenUsageWindowTitles[provider.kind]?.includes(row.title)) ?? [];
+  const visible = (usage.data ?? []).filter((candidate) =>
+    settings.data ? (
+      settings.data.enabledProviders.includes(candidate.id) ||
+      settings.data.enabledProviders.includes(candidate.kind)
+    ) : true
+  );
+  const provider = (payload !== null && payload.index !== undefined && visible[payload.index])
+    ? visible[payload.index]
+    : usage.data?.find((candidate) => candidate.kind === payload?.kind);
+  const hidden = provider
+    ? (settings.data?.hiddenUsageWindowTitles[provider.id] ?? settings.data?.hiddenUsageWindowTitles[provider.kind] ?? [])
+    : [];
+  const visibleWindows = provider?.windows.filter((row) => !hidden.includes(row.title)) ?? [];
 
   useEffect(() => {
     const apply = (next: CardShowPayload | null): void => setPayload(next);
@@ -100,13 +111,14 @@ function Card(): JSX.Element {
   );
 
   const position = settings.data?.widgetPosition ?? "right";
+  const parsed = provider ? parseProviderId(provider.id || provider.kind) : null;
   const card = (
      <main className="notch-card-body relative flex h-fit select-none flex-col px-5 py-5" style={{ width: CARD_WIDTH - 16 }}>
        <h2 className="m-0 mb-4 flex items-center gap-2.5 p-0 text-[18px] font-medium leading-none">
         {provider && (
           <>
              <img className="h-[19px] w-[19px] shrink-0 object-contain" src={`./${PROVIDER_LOGOS[provider.kind]}`} alt="" />
-            <span>{providerShortLabel(provider.kind)}</span>
+            <span>{parsed?.displayName ?? provider.kind}</span>
             {settings.data?.showAccountLabels && provider.accountLabel && <span className="min-w-0 truncate text-xs text-mute">{provider.accountLabel}</span>}
             <span className="h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: statusDotColor(provider.error !== null) }} />
           </>
