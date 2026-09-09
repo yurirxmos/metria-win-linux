@@ -101,6 +101,25 @@ test("resolveAgyExecutable searches PATH when configured path does not exist", (
   }
 });
 
+test("resolveAgyExecutable checks .exe when .cmd is missing on Windows", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agy-win-test-"));
+  const exePath = join(dir, "agy.exe");
+  const cmdPath = join(dir, "agy.cmd");
+  writeFileSync(exePath, "#!/bin/sh\n");
+
+  try {
+    // Configured path ends with .cmd, but only .exe exists
+    const resolved = resolveAgyExecutable(cmdPath, { Path: "" }, "win32");
+    assert.equal(resolved, exePath);
+
+    // Also verify env.Path resolution finds agy.exe
+    const resolvedViaPath = resolveAgyExecutable("/missing/agy.cmd", { Path: dir }, "win32");
+    assert.equal(resolvedViaPath, exePath);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("runAgyUsage executes binary and parses stdout", async () => {
   const dir = mkdtempSync(join(tmpdir(), "agy-exec-test-"));
   const mockScript = join(dir, "mock-agy.sh");

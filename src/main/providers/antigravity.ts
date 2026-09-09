@@ -5,13 +5,22 @@ import type { ProviderKind, ProviderUsage, UsageWindow } from "../../shared/type
 import type { ProviderPaths } from "../provider-paths";
 import type { WslShell } from "../wsl";
 
-export function resolveAgyExecutable(configuredPath: string, env: NodeJS.ProcessEnv = process.env): string | null {
+export function resolveAgyExecutable(
+  configuredPath: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): string | null {
   if (configuredPath && existsSync(configuredPath)) return configuredPath;
-  const pathDirs = (env.PATH ?? "").split(delimiter).filter(Boolean);
+  if (configuredPath && platform === "win32" && /\.cmd$/i.test(configuredPath)) {
+    const exe = configuredPath.replace(/\.cmd$/i, ".exe");
+    if (existsSync(exe)) return exe;
+  }
+  const rawPath = env.PATH ?? env.Path ?? "";
+  const pathDirs = rawPath.split(delimiter).filter(Boolean);
   for (const dir of pathDirs) {
-    const candidate = join(dir, process.platform === "win32" ? "agy.cmd" : "agy");
+    const candidate = join(dir, platform === "win32" ? "agy.cmd" : "agy");
     if (existsSync(candidate)) return candidate;
-    if (process.platform === "win32") {
+    if (platform === "win32") {
       const exeCandidate = join(dir, "agy.exe");
       if (existsSync(exeCandidate)) return exeCandidate;
     }
@@ -21,9 +30,11 @@ export function resolveAgyExecutable(configuredPath: string, env: NodeJS.Process
 
 export function runAgyUsage(executable: string, timeoutMs = 30_000): Promise<string> {
   return new Promise((resolve, reject) => {
+    const isBatch = process.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
     const child = spawn(executable, ["-p", "/usage"], {
       stdio: ["ignore", "pipe", "ignore"],
-      windowsHide: true
+      windowsHide: true,
+      shell: isBatch
     });
     let output = "";
     child.stdout?.on("data", (chunk: Buffer) => {
