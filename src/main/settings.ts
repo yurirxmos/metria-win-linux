@@ -1,5 +1,6 @@
 import { app } from "electron";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { ALL_PROVIDER_KINDS, DEFAULT_REFRESH_INTERVAL_SECONDS, DEFAULT_WIDGET_Y_OFFSET, isProviderKind, isValidProviderId, parseProviderId } from "../shared/types";
 import type { AlertSettings, AppSettings, ProviderKind, ProviderSourceChoice } from "../shared/types";
@@ -19,13 +20,22 @@ const defaults: AppSettings = {
   widgetSize: "medium",
   widgetOpacity: 1,
   widgetDisplayId: null,
+  locale: "system",
   providerSource: {},
   hiddenUsageWindowTitles: {},
   alerts: { enabled: true, cautionThreshold: 40, warningThreshold: 65, criticalThreshold: 85, cautionColor: "#ffd60a", warningColor: "#ff9f0a", criticalColor: "#ff453a" }
 };
 
 export class SettingsStore {
-  private readonly path = join(app.getPath("userData"), "settings.json");
+  private readonly path: string;
+
+  constructor(customPath?: string) {
+    this.path =
+      customPath ??
+      (app?.getPath
+        ? join(app.getPath("userData"), "settings.json")
+        : join(tmpdir(), `metria-settings-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`));
+  }
 
   load(): AppSettings {
     try {
@@ -43,6 +53,7 @@ export class SettingsStore {
         widgetSize: ["small", "medium", "large"].includes(parsed.widgetSize as string) ? parsed.widgetSize as AppSettings["widgetSize"] : defaults.widgetSize,
         widgetOpacity: Math.min(1, Math.max(0.35, numberOr(parsed.widgetOpacity, defaults.widgetOpacity))),
         widgetDisplayId: typeof parsed.widgetDisplayId === "string" ? parsed.widgetDisplayId : defaults.widgetDisplayId,
+        locale: parsed.locale === "en-US" || parsed.locale === "pt-BR" || parsed.locale === "system" ? parsed.locale : defaults.locale,
         providerSource: normalizeProviderSource(parsed.providerSource),
         hiddenUsageWindowTitles: normalizeHiddenWindows(parsed.hiddenUsageWindowTitles),
         alerts: normalizeAlerts(parsed.alerts)
@@ -52,7 +63,7 @@ export class SettingsStore {
 
   setWidgetYOffset(widgetYOffset: number): AppSettings { return this.save({ ...this.load(), widgetYOffset, widgetAlongEdgeOffset: widgetYOffset }); }
 
-  setWidgetPreferences(preferences: Partial<Pick<AppSettings, "showWidget" | "showTray" | "showAccountLabels" | "widgetBehavior" | "widgetPosition" | "widgetSize" | "widgetOpacity" | "widgetDisplayId" | "alerts">>): AppSettings {
+  setWidgetPreferences(preferences: Partial<Pick<AppSettings, "showWidget" | "showTray" | "showAccountLabels" | "widgetBehavior" | "widgetPosition" | "widgetSize" | "widgetOpacity" | "widgetDisplayId" | "alerts" | "locale">>): AppSettings {
     const current = this.load();
     const next = { ...current, ...preferences };
     if (preferences.widgetPosition && preferences.widgetPosition !== current.widgetPosition) {

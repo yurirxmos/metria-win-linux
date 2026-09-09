@@ -157,6 +157,7 @@ const dummySettings: AppSettings = {
   widgetSize: "medium",
   widgetOpacity: 1,
   widgetDisplayId: null,
+  locale: "system",
   providerSource: {},
   hiddenUsageWindowTitles: {},
   alerts: {
