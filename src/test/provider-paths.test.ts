@@ -13,3 +13,26 @@ test("provider credential roots honor Windows, Linux XDG, and explicit Codex hom
   assert.equal(providerPaths(win).claudeCredentials, join("C:\\Users\\Ada", ".claude", ".credentials.json"));
   assert.equal(providerPaths(linux).claudeCredentials, join("/home/ada", ".claude", ".credentials.json"));
 });
+
+test("resolves Linux paths including Cursor DB and Antigravity binary", () => {
+  const paths = providerPaths({ platform: "linux", home: "/home/user", env: {} });
+  assert.equal(paths.cursorStateDb, "/home/user/.config/Cursor/User/globalStorage/state.vscdb");
+  assert.equal(paths.antigravityBin, "/home/user/.local/bin/agy");
+});
+
+test("respects XDG_CONFIG_HOME on Linux for Cursor", () => {
+  const paths = providerPaths({ platform: "linux", home: "/home/user", env: { XDG_CONFIG_HOME: "/custom/config" } });
+  assert.equal(paths.cursorStateDb, "/custom/config/Cursor/User/globalStorage/state.vscdb");
+});
+
+test("resolves Windows paths including Cursor DB and Antigravity binary", () => {
+  const paths = providerPaths({ platform: "win32", home: "C:\\Users\\User", env: { APPDATA: "C:\\Users\\User\\AppData\\Roaming" } });
+  assert.equal(paths.cursorStateDb, join("C:\\Users\\User\\AppData\\Roaming", "Cursor", "User", "globalStorage", "state.vscdb"));
+  assert.equal(paths.antigravityBin, join("C:\\Users\\User", ".local", "bin", "agy.cmd"));
+});
+
+test("resolves macOS paths for Cursor DB", () => {
+  const paths = providerPaths({ platform: "darwin", home: "/Users/user", env: {} });
+  assert.equal(paths.cursorStateDb, "/Users/user/Library/Application Support/Cursor/User/globalStorage/state.vscdb");
+});
+
