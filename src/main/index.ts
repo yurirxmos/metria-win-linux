@@ -153,8 +153,7 @@ function createWidgetWindow(): BrowserWindow {
 }
 function updateWidgetBounds(values: typeof lastUsage): void {
   if (!widgetWindow) return;
-  const enabled = settings.load().enabledProviders;
-  const count = values.filter((provider) => enabled.includes(provider.kind)).length;
+  const count = visibleProviders(values).length;
   const bounds = widgetBounds(displayArea(), count);
   widgetWindow.setBounds(bounds);
   widgetWindow.setShape(widgetShape(bounds, settings.load().widgetPosition));
@@ -164,9 +163,11 @@ function updateWidgetBounds(values: typeof lastUsage): void {
 /** Hover card shown to the left of the widget while pointing at a provider. */
 const CARD_SPACING = 12;
 
-function visibleProviders(): typeof lastUsage {
-  const enabled = settings.load().enabledProviders;
-  return lastUsage.filter((provider) => enabled.includes(provider.kind));
+export function visibleProviders(
+  providers: typeof lastUsage = lastUsage,
+  enabled: string[] = settings.load().enabledProviders
+): typeof lastUsage {
+  return providers.filter((provider) => enabled.includes(provider.id) || enabled.includes(provider.kind));
 }
 
 function createCardWindow(): BrowserWindow {
@@ -275,8 +276,7 @@ function trayMenuIcon(name: string): Electron.NativeImage | undefined {
   return path ? nativeImage.createFromPath(path).resize({ width: 16, height: 16 }) : undefined;
 }
 function usageRows(providers: typeof lastUsage): UsageRow[] {
-  const enabled = settings.load().enabledProviders;
-  return providers.filter((provider) => enabled.includes(provider.kind) && provider.windows[0]).map((provider) => ({
+  return visibleProviders(providers).filter((provider) => provider.windows[0]).map((provider) => ({
     name: providerShortLabel(provider.kind),
     percent: Math.round(Math.max(0, Math.min(100, provider.windows[0]!.percent))),
     reset: formatReset(provider.windows[0]!.resetDate),
@@ -391,8 +391,7 @@ function badgeTemplate(): Electron.MenuItemConstructorOptions[] {
   ];
 }
 function updateBadges(providers: typeof lastUsage): void {
-  const enabled = settings.load().enabledProviders;
-  const active = providers.filter((provider) => enabled.includes(provider.kind) && provider.available);
+  const active = visibleProviders(providers).filter((provider) => provider.available);
   for (const [kind, badge] of badgeTrays) {
     if (!active.some((provider) => provider.kind === kind)) { badge.destroy(); badgeTrays.delete(kind); }
   }
