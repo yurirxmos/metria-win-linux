@@ -291,3 +291,40 @@ test("checkAgyVersionOrHelp invokes spawn and handles success and fallbacks", ()
   }) as any);
   assert.match(resThrow.error ?? "", /spawn ENOENT/);
 });
+
+test("cache lookup helper prefers exact id and avoids profile collision", () => {
+  const lastUsage: ProviderUsage[] = [
+    {
+      id: "Claude",
+      kind: "Claude",
+      accountLabel: "default@example.com",
+      windows: [{ title: "Current session", percent: 50, resetDate: null }],
+      updatedAt: "2026-09-09T00:00:00.000Z",
+      error: null,
+      available: true,
+      setupHint: ""
+    }
+  ];
+
+  const profileFailure: ProviderUsage = {
+    id: "Claude-work",
+    kind: "Claude",
+    accountLabel: null,
+    windows: [],
+    updatedAt: "2026-09-09T01:00:00.000Z",
+    error: "Token expired",
+    available: false,
+    setupHint: ""
+  };
+
+  const lookup = (value: ProviderUsage) =>
+    lastUsage.find((entry) => entry.id === value.id) ??
+    (value.id === value.kind ? lastUsage.find((entry) => entry.kind === value.kind) : undefined);
+
+  // Claude-work must NOT fall back to Claude's cache
+  assert.equal(lookup(profileFailure), undefined);
+
+  // Claude default matches exact id
+  const claudeFailure: ProviderUsage = { ...profileFailure, id: "Claude" };
+  assert.equal(lookup(claudeFailure)?.accountLabel, "default@example.com");
+});

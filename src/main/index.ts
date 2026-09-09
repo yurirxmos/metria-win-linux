@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { ALL_PROVIDER_KINDS, CARD_WIDTH, isProviderKind, isValidProviderId, parseProviderId, PROVIDER_LOGOS, providerShortLabel, WIDGET_ITEM_GAP, WIDGET_ITEM_HEIGHT, WIDGET_PADDING, WIDGET_WIDTH } from "../shared/types";
 import { ProviderService } from "./providers";
 import { SettingsStore } from "./settings";
-import { diagnoseProvider } from "./diagnostics";
+import { buildReconnectCommand, diagnoseProvider } from "./diagnostics";
 import type { AppSettings, ProviderKind, ProviderSourceChoice, ProviderUsage } from "../shared/types";
 
 let window: BrowserWindow | undefined;
@@ -433,7 +433,7 @@ function requireTrustedSender(event: Electron.IpcMainInvokeEvent): void {
 async function usage() {
   const targets = providers.getProviders().map((p) => p.id);
   const values = (await providers.fetch(targets)).map((value) => {
-    const cached = lastUsage.find((entry) => entry.id === value.id || entry.kind === value.kind);
+    const cached = lastUsage.find((entry) => entry.id === value.id) ?? (value.id === value.kind ? lastUsage.find((entry) => entry.kind === value.kind) : undefined);
     return value.error && cached?.windows.length ? { ...value, accountLabel: value.accountLabel ?? cached.accountLabel, windows: cached.windows, updatedAt: cached.updatedAt } : value;
   });
   lastUsage = values;
@@ -525,27 +525,8 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   });
   ipcMain.handle("metria:reconnect", async (event, rawId: unknown) => {
     requireTrustedSender(event);
-    const parsed = parseProviderId(String(rawId));
-    let command = "";
-    let message = "";
-
-    if (parsed.kind === "Claude") {
-      command = parsed.slug ? `CLAUDE_CONFIG_DIR=~/.claude-${parsed.slug} claude auth login` : "claude auth login";
-      message = `Run \`${command}\` in your terminal, then refresh Metria.`;
-    } else if (parsed.kind === "Codex") {
-      command = "codex login";
-      message = `Run \`${command}\` in your terminal, then refresh Metria.`;
-    } else if (parsed.kind === "OpenCode Go") {
-      command = "opencode auth login";
-      message = `Run \`${command}\` in your terminal, then refresh Metria.`;
-    } else if (parsed.kind === "Antigravity") {
-      command = "agy auth login";
-      message = `Run \`${command}\` in your terminal, then refresh Metria.`;
-    } else if (parsed.kind === "Cursor") {
-      command = "cursor";
-      message = "Open Cursor and make sure you are signed in, then refresh Metria.";
-    }
-
+    if (!isValidProviderId(rawId)) throw new Error("Invalid provider.");
+    const { command, message } = buildReconnectCommand(String(rawId));
     await shell.openPath(app.getPath("home"));
     return { command, message };
   });
@@ -583,9 +564,10 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   });
   ipcMain.handle("metria:diagnose", async (event, rawId: unknown) => {
     requireTrustedSender(event);
+    if (!isValidProviderId(rawId)) throw new Error("Invalid provider.");
     const parsed = parseProviderId(String(rawId));
     const info = (await providers.sources([parsed.id]))[0];
-    const usage = lastUsage.find((entry) => entry.id === parsed.id) ?? lastUsage.find((entry) => entry.kind === parsed.kind);
+    const usage = lastUsage.find((entry) => entry.id === parsed.id) ?? (parsed.id === parsed.kind ? lastUsage.find((entry) => entry.kind === parsed.kind) : undefined);
     return diagnoseProvider({
       providerId: parsed.id,
       sourceInfo: info,
