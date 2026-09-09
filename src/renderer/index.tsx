@@ -1,16 +1,41 @@
 import { useEffect, useState, type JSX } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
-import { clampPercent, DEFAULT_REFRESH_INTERVAL_SECONDS, gaugeColor, PROVIDER_LOGOS, statusDotColor } from "../shared/types";
-import type { AppSettings, ProviderKind, ProviderSourceChoice, ProviderUsage, UsageWindow } from "../shared/types";
+import { clampPercent, DEFAULT_REFRESH_INTERVAL_SECONDS, gaugeColor, parseProviderId, PROVIDER_LOGOS, statusDotColor } from "../shared/types";
+import type { AppSettings, LocaleChoice, ProviderKind, ProviderSourceChoice, ProviderUsage, UsageWindow } from "../shared/types";
+import { getTranslations, resolveLocale, translateWindowTitle, formatResetDate } from "../shared/i18n";
 import "./app.css";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false } } });
 const SOURCES_KEY = ["provider-sources"] as const;
-const WINDOW_TITLES: Record<ProviderKind, string[]> = { Claude: ["Current session", "All models"], Codex: ["Current session", "All models"], "OpenCode Go": ["Current session", "This week", "This month"] };
+const WINDOW_TITLES: Record<ProviderKind, string[]> = {
+  Claude: ["Current session", "All models"],
+  Codex: ["Current session", "All models"],
+  "OpenCode Go": ["Current session", "This week", "This month"],
+  Cursor: ["Cursor models", "API usage", "This cycle"],
+  Antigravity: [
+    "5-hour Gemini",
+    "Weekly Gemini",
+    "5-hour other models",
+    "Weekly other models"
+  ]
+};
 
 function useProviderSources() {
   return useQuery({ queryKey: SOURCES_KEY, queryFn: () => window.metria.getProviderSources() });
+}
+
+function useI18n() {
+  const settings = useQuery({ queryKey: ["settings"], queryFn: () => window.metria.getSettings() });
+  const choice = settings.data?.locale ?? "system";
+  const locale = resolveLocale(choice, typeof navigator !== "undefined" ? navigator.language : undefined);
+  const t = getTranslations(locale);
+  return {
+    choice,
+    locale,
+    t,
+    translateTitle: (title: string) => translateWindowTitle(title, locale)
+  };
 }
 function parseSource(value: string): ProviderSourceChoice {
   return value === "host" ? { location: "host" } : { location: "wsl", distro: value.slice(4) };
@@ -20,7 +45,6 @@ function sourceValue(source: ProviderSourceChoice | null): string {
 }
 
 function percentage(value: number): string { return `${clampPercent(value).toFixed(0)}%`; }
-function date(value: string | null): string { return value ? `Resets ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))}` : "No reset time available"; }
 
 function usageColor(percent: number, alerts?: AppSettings["alerts"]): string {
   if (!alerts?.enabled) return gaugeColor(percent);
@@ -31,30 +55,33 @@ function usageColor(percent: number, alerts?: AppSettings["alerts"]): string {
 }
 
 function UsageRow({ window: row, alerts }: { window: UsageWindow; alerts?: AppSettings["alerts"] }): JSX.Element {
+  const { locale, translateTitle } = useI18n();
   return (
     <div className="mt-[18px] first:mt-0">
       <div className="flex justify-between gap-4">
-        <span>{row.title}</span>
+        <span>{translateTitle(row.title)}</span>
         <strong className="font-mono text-lg">{percentage(row.percent)}</strong>
       </div>
       <div className="my-[9px] h-2 overflow-hidden rounded-[99px] bg-[#1c1c1e]">
        <i className="block h-full rounded-[99px]" style={{ background: usageColor(row.percent, alerts), width: percentage(row.percent) }} />
       </div>
-      <small className="text-dim">{date(row.resetDate)}</small>
+      <small className="text-dim">{formatResetDate(row.resetDate, locale)}</small>
     </div>
   );
 }
 
 function ProviderCard({ provider, enabled, showAccount, hiddenWindows, alerts, onStatus }: { provider: ProviderUsage; enabled: boolean; showAccount: boolean; hiddenWindows: string[]; alerts?: AppSettings["alerts"]; onStatus: (message: string) => void }): JSX.Element {
+  const { t } = useI18n();
+  const parsed = parseProviderId(provider.id || provider.kind);
   const setEnabled = useMutation({
-    mutationFn: (value: boolean) => window.metria.setProviderEnabled(provider.kind, value),
+    mutationFn: (value: boolean) => window.metria.setProviderEnabled(provider.id || provider.kind, value),
     onSuccess: (settings) => {
       queryClient.setQueryData(["settings"], settings);
       void queryClient.invalidateQueries({ queryKey: ["usage"] });
     }
   });
   const setup = useMutation({
-    mutationFn: () => window.metria.reconnect(provider.kind),
+    mutationFn: () => window.metria.reconnect(provider.id || provider.kind),
     onSuccess: (result) => onStatus(result.message)
   });
   const pending = setEnabled.isPending || setup.isPending;
@@ -68,7 +95,7 @@ function ProviderCard({ provider, enabled, showAccount, hiddenWindows, alerts, o
       <div className="flex items-center justify-between gap-[18px]">
         <div className="flex items-center gap-2.5">
           <img className="h-[22px] w-[22px] object-contain" src={`./${PROVIDER_LOGOS[provider.kind]}`} alt="" />
-           <h2 className="m-0 text-xl font-semibold">{provider.kind}</h2>
+           <h2 className="m-0 text-xl font-semibold">{parsed.displayName}</h2>
            {showAccount && provider.accountLabel && <span className="text-xs text-mute">{provider.accountLabel}</span>}
           <span className="h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: statusDotColor(provider.error !== null) }} />
         </div>
@@ -78,21 +105,22 @@ function ProviderCard({ provider, enabled, showAccount, hiddenWindows, alerts, o
           onClick={onClick}
           disabled={pending}
         >
-          {!enabled ? "Enable" : provider.available ? "Disable" : "Setup"}
+          {!enabled ? t.common.enable : provider.available ? t.common.disable : t.common.setup}
         </button>
       </div>
       {!provider.available && <p className="m-0 mt-4 leading-relaxed text-dim">{provider.setupHint}</p>}
       {provider.error && <p className="m-0 mt-4 leading-relaxed text-dim">{provider.error}</p>}
        {provider.windows.filter((row) => !hiddenWindows.includes(row.title)).map((row) => <UsageRow key={row.title} window={row} alerts={alerts} />)}
-       {provider.windows.length > 0 && provider.windows.every((row) => hiddenWindows.includes(row.title)) && <p className="mt-4 text-dim">All usage windows are hidden. Enable one in Settings.</p>}
+       {provider.windows.length > 0 && provider.windows.every((row) => hiddenWindows.includes(row.title)) && <p className="mt-4 text-dim">{t.dashboard.allWindowsHidden}</p>}
     </article>
   );
 }
 
 function SourceChoiceModal(): JSX.Element {
+  const { t } = useI18n();
   const sources = useProviderSources();
   const choice = useMutation({
-    mutationFn: (variables: { kind: ProviderKind; source: ProviderSourceChoice }) => window.metria.setProviderSource(variables.kind, variables.source),
+    mutationFn: (variables: { kind: ProviderKind | string; source: ProviderSourceChoice }) => window.metria.setProviderSource(variables.kind, variables.source),
     onSuccess: (next) => {
       queryClient.setQueryData(["settings"], next);
       void queryClient.invalidateQueries({ queryKey: SOURCES_KEY });
@@ -103,28 +131,32 @@ function SourceChoiceModal(): JSX.Element {
   if (!pending.length) return <></>;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-6" role="presentation">
-      <div role="dialog" aria-modal="true" aria-label="Provider data source" className="max-h-[85vh] w-[min(560px,100%)] overflow-y-auto bg-surface p-6 shadow-2xl">
-        <h2 className="m-0 text-2xl font-semibold tracking-[-0.05em]">Where is your provider data?</h2>
-        <p className="m-0 mt-3 leading-relaxed text-dim">Metria found the same provider here in Windows and inside WSL. Pick which data to track.</p>
-        {pending.map((info) => (
-          <section key={info.kind} className="mt-6 border-t border-line pt-4">
-            <h3 className="m-0 text-lg font-semibold">{info.kind}</h3>
-            <div className="mt-3 flex flex-wrap gap-2.5">
-              {info.host && (
-                <button type="button" className="cursor-pointer border border-line2 bg-transparent px-4 py-2 text-[#d8d8dc] disabled:opacity-55"
-                  onClick={() => choice.mutate({ kind: info.kind, source: { location: "host" } })} disabled={choice.isPending}>
-                  Windows
-                </button>
-              )}
-              {info.wsl.filter((entry) => entry.present).map((entry) => (
-                <button key={entry.distro} type="button" className="cursor-pointer border border-line2 bg-transparent px-4 py-2 text-[#d8d8dc] disabled:opacity-55"
-                  onClick={() => choice.mutate({ kind: info.kind, source: { location: "wsl", distro: entry.distro } })} disabled={choice.isPending}>
-                  WSL: {entry.distro}
-                </button>
-              ))}
-            </div>
-          </section>
-        ))}
+      <div role="dialog" aria-modal="true" aria-label={t.sourceModal.title} className="max-h-[85vh] w-[min(560px,100%)] overflow-y-auto bg-surface p-6 shadow-2xl">
+        <h2 className="m-0 text-2xl font-semibold tracking-[-0.05em]">{t.sourceModal.title}</h2>
+        <p className="m-0 mt-3 leading-relaxed text-dim">{t.sourceModal.description}</p>
+        {pending.map((info) => {
+          const infoId = info.id ?? info.kind;
+          const parsed = parseProviderId(infoId);
+          return (
+            <section key={infoId} className="mt-6 border-t border-line pt-4">
+              <h3 className="m-0 text-lg font-semibold">{parsed.displayName}</h3>
+              <div className="mt-3 flex flex-wrap gap-2.5">
+                {info.host && (
+                  <button type="button" className="cursor-pointer border border-line2 bg-transparent px-4 py-2 text-[#d8d8dc] disabled:opacity-55"
+                    onClick={() => choice.mutate({ kind: infoId, source: { location: "host" } })} disabled={choice.isPending}>
+                    {t.common.windows}
+                  </button>
+                )}
+                {info.wsl.filter((entry) => entry.present).map((entry) => (
+                  <button key={entry.distro} type="button" className="cursor-pointer border border-line2 bg-transparent px-4 py-2 text-[#d8d8dc] disabled:opacity-55"
+                    onClick={() => choice.mutate({ kind: infoId, source: { location: "wsl", distro: entry.distro } })} disabled={choice.isPending}>
+                    {t.common.wslDistro}: {entry.distro}
+                  </button>
+                ))}
+              </div>
+            </section>
+          );
+        })}
       </div>
     </div>
   );
@@ -134,6 +166,7 @@ const REFRESH_OPTIONS = [300, 600, 900, 1800];
 const PLATFORM_LABEL: Record<string, string> = { win32: "Windows", linux: "Linux", darwin: "macOS" };
 
 function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
+  const { t, translateTitle, locale } = useI18n();
   const [notice, setNotice] = useState("");
   const [updateStatus, setUpdateStatus] = useState<"idle" | "downloaded">("idle");
   const appInfo = useQuery({ queryKey: ["app-info"], queryFn: () => window.metria.getAppInfo() });
@@ -144,7 +177,7 @@ function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
   });
   const installUpdate = useMutation({
     mutationFn: () => window.metria.installUpdate(),
-    onSuccess: () => setNotice("The update is installing…")
+    onSuccess: () => setNotice(t.common.installing)
   });
   const setRefreshInterval = useMutation({
     mutationFn: (seconds: number) => window.metria.setRefreshInterval(seconds),
@@ -164,17 +197,17 @@ function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
   const usageData = useQuery({ queryKey: ["usage"], queryFn: () => window.metria.getUsage() }).data ?? [];
   const displays = useQuery({ queryKey: ["displays"], queryFn: () => window.metria.getDisplays() });
   const setPreferences = useMutation({
-    mutationFn: (preferences: Partial<Pick<AppSettings, "showWidget" | "showTray" | "showAccountLabels" | "widgetBehavior" | "widgetPosition" | "widgetSize" | "widgetOpacity" | "widgetDisplayId" | "alerts">>) => window.metria.setWidgetPreferences(preferences),
+    mutationFn: (preferences: Partial<Pick<AppSettings, "showWidget" | "showTray" | "showAccountLabels" | "widgetBehavior" | "widgetPosition" | "widgetSize" | "widgetOpacity" | "widgetDisplayId" | "alerts" | "locale">>) => window.metria.setWidgetPreferences(preferences),
     onSuccess: (next) => { queryClient.setQueryData(["settings"], next); void queryClient.invalidateQueries({ queryKey: ["usage"] }); }
   });
   const setWindowVisible = useMutation({
-    mutationFn: (value: { kind: ProviderKind; title: string; visible: boolean }) => window.metria.setWindowVisible(value.kind, value.title, value.visible),
+    mutationFn: (value: { kind: ProviderKind | string; title: string; visible: boolean }) => window.metria.setWindowVisible(value.kind, value.title, value.visible),
     onSuccess: (next) => queryClient.setQueryData(["settings"], next)
   });
-  const diagnose = useMutation({ mutationFn: (kind: ProviderKind) => window.metria.diagnose(kind), onSuccess: (message) => setNotice(message) });
+  const diagnose = useMutation({ mutationFn: (kind: ProviderKind | string) => window.metria.diagnose(kind), onSuccess: (message) => setNotice(message) });
   const providerSources = useProviderSources();
   const setProviderSource = useMutation({
-    mutationFn: (variables: { kind: ProviderKind; source: ProviderSourceChoice }) => window.metria.setProviderSource(variables.kind, variables.source),
+    mutationFn: (variables: { kind: ProviderKind | string; source: ProviderSourceChoice }) => window.metria.setProviderSource(variables.kind, variables.source),
     onSuccess: (next) => {
       queryClient.setQueryData(["settings"], next);
       void queryClient.invalidateQueries({ queryKey: SOURCES_KEY });
@@ -193,121 +226,142 @@ function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
   const loginMessage = loginItem.data?.message;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-6" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <div role="dialog" aria-modal="true" aria-label="Settings" className="max-h-[85vh] w-[min(600px,100%)] overflow-y-auto bg-surface p-6 shadow-2xl">
+      <div role="dialog" aria-modal="true" aria-label={t.settings.title} className="max-h-[85vh] w-[min(600px,100%)] overflow-y-auto bg-surface p-6 shadow-2xl">
         <div className="flex items-center justify-between border-b border-line pb-4">
-          <h2 className="m-0 text-2xl font-semibold tracking-[-0.05em]">Settings</h2>
-          <button type="button" aria-label="Close settings" className="cursor-pointer border border-line2 bg-transparent px-3 py-1.5 text-dim hover:text-fg" onClick={onClose}>Close</button>
+          <h2 className="m-0 text-2xl font-semibold tracking-[-0.05em]">{t.settings.title}</h2>
+          <button type="button" aria-label={t.settings.close} className="cursor-pointer border border-line2 bg-transparent px-3 py-1.5 text-dim hover:text-fg" onClick={onClose}>{t.common.close}</button>
         </div>
 
         <section className="mt-5">
-          <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">App</h3>
+          <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">{t.settings.appSection.title}</h3>
           <dl className="mt-2 leading-relaxed">
-            <div className="flex justify-between gap-4"><dt className="m-0 text-dim">Version</dt><dd className="m-0 font-mono">{info?.version ?? "…"}</dd></div>
-            <div className="flex justify-between gap-4"><dt className="m-0 text-dim">Platform</dt><dd className="m-0">{info ? PLATFORM_LABEL[info.platform] ?? info.platform : "…"}</dd></div>
-            {info && <div className="mt-2"><dt className="m-0 text-dim">Data folder</dt><dd className="m-0 mt-1 break-all font-mono text-xs text-mute">{info.dataPath}</dd></div>}
+            <div className="flex justify-between gap-4"><dt className="m-0 text-dim">{t.settings.appSection.version}</dt><dd className="m-0 font-mono">{info?.version ?? "…"}</dd></div>
+            <div className="flex justify-between gap-4"><dt className="m-0 text-dim">{t.settings.appSection.platform}</dt><dd className="m-0">{info ? PLATFORM_LABEL[info.platform] ?? info.platform : "…"}</dd></div>
+            {info && <div className="mt-2"><dt className="m-0 text-dim">{t.settings.appSection.dataPath}</dt><dd className="m-0 mt-1 break-all font-mono text-xs text-mute">{info.dataPath}</dd></div>}
           </dl>
         </section>
 
         <section className="mt-6">
-          <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">Display</h3>
+          <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">{t.settings.displaySection.title}</h3>
           <div className="mt-3 grid gap-3">
-            <label className="flex items-center justify-between gap-4 text-dim">Show usage widget <input type="checkbox" checked={settingsData?.showWidget ?? true} onChange={(event) => setPreferences.mutate({ showWidget: event.target.checked })} /></label>
-            <label className="flex items-center justify-between gap-4 text-dim">Show in system tray <input type="checkbox" checked={settingsData?.showTray ?? true} onChange={(event) => setPreferences.mutate({ showTray: event.target.checked })} /></label>
-            <label className="flex items-center justify-between gap-4 text-dim">Show provider account <input type="checkbox" checked={settingsData?.showAccountLabels ?? true} onChange={(event) => setPreferences.mutate({ showAccountLabels: event.target.checked })} /></label>
+            <label className="flex items-center justify-between gap-4 text-dim">{t.settings.displaySection.showWidget} <input type="checkbox" checked={settingsData?.showWidget ?? true} onChange={(event) => setPreferences.mutate({ showWidget: event.target.checked })} /></label>
+            <label className="flex items-center justify-between gap-4 text-dim">{t.settings.displaySection.showTray} <input type="checkbox" checked={settingsData?.showTray ?? true} onChange={(event) => setPreferences.mutate({ showTray: event.target.checked })} /></label>
+            <label className="flex items-center justify-between gap-4 text-dim">{t.settings.displaySection.showAccountLabels} <input type="checkbox" checked={settingsData?.showAccountLabels ?? true} onChange={(event) => setPreferences.mutate({ showAccountLabels: event.target.checked })} /></label>
           </div>
           <div className="mt-4 grid grid-cols-2 gap-3">
-            <label className="grid gap-1 text-dim">Behavior<select className="border border-line2 bg-surface px-2.5 py-1.5 text-fg" value={settingsData?.widgetBehavior ?? "pinned"} onChange={(event) => setPreferences.mutate({ widgetBehavior: event.target.value as AppSettings["widgetBehavior"] })}><option value="pinned">Pinned</option><option value="auto-hide">Auto-hide</option></select></label>
-            <label className="grid gap-1 text-dim">Position<select className="border border-line2 bg-surface px-2.5 py-1.5 text-fg" value={settingsData?.widgetPosition ?? "right"} onChange={(event) => setPreferences.mutate({ widgetPosition: event.target.value as AppSettings["widgetPosition"] })}><option value="right">Right</option><option value="left">Left</option><option value="top">Top</option><option value="bottom">Bottom</option></select></label>
-            <label className="grid gap-1 text-dim">Size<select className="border border-line2 bg-surface px-2.5 py-1.5 text-fg" value={settingsData?.widgetSize ?? "medium"} onChange={(event) => setPreferences.mutate({ widgetSize: event.target.value as AppSettings["widgetSize"] })}><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select></label>
-            <label className="grid gap-1 text-dim">Monitor<select className="border border-line2 bg-surface px-2.5 py-1.5 text-fg" value={settingsData?.widgetDisplayId ?? ""} onChange={(event) => setPreferences.mutate({ widgetDisplayId: event.target.value || null })}><option value="">Active display</option>{(displays.data ?? []).map((display) => <option key={display.id} value={display.id}>{display.label}</option>)}</select></label>
+            <label className="grid gap-1 text-dim">{t.settings.displaySection.behavior}<select className="border border-line2 bg-surface px-2.5 py-1.5 text-fg" value={settingsData?.widgetBehavior ?? "pinned"} onChange={(event) => setPreferences.mutate({ widgetBehavior: event.target.value as AppSettings["widgetBehavior"] })}><option value="pinned">{t.settings.displaySection.behaviorPinned}</option><option value="auto-hide">{t.settings.displaySection.behaviorAutoHide}</option></select></label>
+            <label className="grid gap-1 text-dim">{t.settings.displaySection.position}<select className="border border-line2 bg-surface px-2.5 py-1.5 text-fg" value={settingsData?.widgetPosition ?? "right"} onChange={(event) => setPreferences.mutate({ widgetPosition: event.target.value as AppSettings["widgetPosition"] })}><option value="right">{t.settings.displaySection.posRight}</option><option value="left">{t.settings.displaySection.posLeft}</option><option value="top">{t.settings.displaySection.posTop}</option><option value="bottom">{t.settings.displaySection.posBottom}</option></select></label>
+            <label className="grid gap-1 text-dim">{t.settings.displaySection.size}<select className="border border-line2 bg-surface px-2.5 py-1.5 text-fg" value={settingsData?.widgetSize ?? "medium"} onChange={(event) => setPreferences.mutate({ widgetSize: event.target.value as AppSettings["widgetSize"] })}><option value="small">{t.settings.displaySection.sizeSmall}</option><option value="medium">{t.settings.displaySection.sizeMedium}</option><option value="large">{t.settings.displaySection.sizeLarge}</option></select></label>
+            <label className="grid gap-1 text-dim">{t.settings.displaySection.monitor}<select className="border border-line2 bg-surface px-2.5 py-1.5 text-fg" value={settingsData?.widgetDisplayId ?? ""} onChange={(event) => setPreferences.mutate({ widgetDisplayId: event.target.value || null })}><option value="">{t.settings.displaySection.activeDisplay}</option>{(displays.data ?? []).map((display) => <option key={display.id} value={display.id}>{display.label}</option>)}</select></label>
           </div>
-          <label className="mt-4 grid gap-1 text-dim">Opacity: {Math.round((settingsData?.widgetOpacity ?? 1) * 100)}%<input type="range" min="35" max="100" value={Math.round((settingsData?.widgetOpacity ?? 1) * 100)} onChange={(event) => setPreferences.mutate({ widgetOpacity: Number(event.target.value) / 100 })} /></label>
+          <label className="mt-4 grid gap-1 text-dim">{t.settings.displaySection.opacity}: {Math.round((settingsData?.widgetOpacity ?? 1) * 100)}%<input type="range" min="35" max="100" value={Math.round((settingsData?.widgetOpacity ?? 1) * 100)} onChange={(event) => setPreferences.mutate({ widgetOpacity: Number(event.target.value) / 100 })} /></label>
+          <label className="mt-4 grid gap-1 text-dim">
+            {t.settings.displaySection.language}
+            <select
+              className="border border-line2 bg-surface px-2.5 py-1.5 text-fg"
+              value={settingsData?.locale ?? "system"}
+              onChange={(event) => setPreferences.mutate({ locale: event.target.value as LocaleChoice })}
+            >
+              <option value="system">{t.settings.displaySection.langSystem}</option>
+              <option value="en-US">{t.settings.displaySection.langEn}</option>
+              <option value="pt-BR">{t.settings.displaySection.langPt}</option>
+            </select>
+          </label>
         </section>
 
         <section className="mt-6">
-          <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">Refresh</h3>
+          <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">{t.settings.refreshSection.title}</h3>
           <div className="mt-2.5 flex items-center gap-2.5">
-            <label className="text-dim" htmlFor="refresh-interval">Usage every</label>
+            <label className="text-dim" htmlFor="refresh-interval">{t.settings.refreshSection.usageEvery}</label>
             <select id="refresh-interval" className="cursor-pointer border border-line2 bg-surface px-2.5 py-1.5 text-fg"
               value={currentInterval}
               onChange={(event) => setRefreshInterval.mutate(Number(event.target.value))}
               disabled={setRefreshInterval.isPending}
             >
-              {intervalOptions.map((seconds) => <option key={seconds} value={seconds}>{Math.round(seconds / 60)} min</option>)}
+              {intervalOptions.map((seconds) => <option key={seconds} value={seconds}>{Math.round(seconds / 60)} {t.settings.refreshSection.minUnit}</option>)}
             </select>
           </div>
         </section>
 
         <section className="mt-6">
-          <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">Usage alerts</h3>
-          <label className="mt-3 flex items-center justify-between gap-4 text-dim">Color usage alerts <input type="checkbox" checked={settingsData?.alerts.enabled ?? true} onChange={(event) => setPreferences.mutate({ alerts: { ...(settingsData?.alerts ?? { cautionThreshold: 40, warningThreshold: 65, criticalThreshold: 85, cautionColor: "#ffd60a", warningColor: "#ff9f0a", criticalColor: "#ff453a" }), enabled: event.target.checked } })} /></label>
+          <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">{t.settings.alertsSection.title}</h3>
+          <label className="mt-3 flex items-center justify-between gap-4 text-dim">{t.settings.alertsSection.colorAlerts} <input type="checkbox" checked={settingsData?.alerts.enabled ?? true} onChange={(event) => setPreferences.mutate({ alerts: { ...(settingsData?.alerts ?? { cautionThreshold: 40, warningThreshold: 65, criticalThreshold: 85, cautionColor: "#ffd60a", warningColor: "#ff9f0a", criticalColor: "#ff453a" }), enabled: event.target.checked } })} /></label>
           <div className="mt-3 grid grid-cols-3 gap-3">
             {(["caution", "warning", "critical"] as const).map((level) => {
               const alerts = settingsData?.alerts ?? { enabled: true, cautionThreshold: 40, warningThreshold: 65, criticalThreshold: 85, cautionColor: "#ffd60a", warningColor: "#ff9f0a", criticalColor: "#ff453a" };
               const thresholdKey = `${level}Threshold` as "cautionThreshold" | "warningThreshold" | "criticalThreshold";
               const colorKey = `${level}Color` as "cautionColor" | "warningColor" | "criticalColor";
-              return <label key={level} className="grid gap-1 text-xs capitalize text-dim">{level}<input type="number" min="1" max="100" value={alerts?.[thresholdKey] ?? 0} onChange={(event) => setPreferences.mutate({ alerts: { ...(alerts!), [thresholdKey]: Number(event.target.value) } })} /><input type="color" value={alerts?.[colorKey] ?? "#ffffff"} onChange={(event) => setPreferences.mutate({ alerts: { ...(alerts!), [colorKey]: event.target.value } })} /></label>;
+              return <label key={level} className="grid gap-1 text-xs capitalize text-dim">{t.settings.alertsSection[level]}<input type="number" min="1" max="100" value={alerts?.[thresholdKey] ?? 0} onChange={(event) => setPreferences.mutate({ alerts: { ...(alerts!), [thresholdKey]: Number(event.target.value) } })} /><input type="color" value={alerts?.[colorKey] ?? "#ffffff"} onChange={(event) => setPreferences.mutate({ alerts: { ...(alerts!), [colorKey]: event.target.value } })} /></label>;
             })}
           </div>
         </section>
 
         {wslDetected && sourceOptions.length > 0 && (
           <section className="mt-6">
-            <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">Provider data source</h3>
-            {sourceOptions.map((entry) => (
-              <div key={entry.kind} className="mt-2.5 flex items-center gap-2.5">
-                <label className="min-w-24 text-dim" htmlFor={`source-${entry.kind}`}>{entry.kind}</label>
-                <select id={`source-${entry.kind}`} className="cursor-pointer border border-line2 bg-surface px-2.5 py-1.5 text-fg"
-                  value={sourceValue(entry.source)}
-                  onChange={(event) => setProviderSource.mutate({ kind: entry.kind, source: parseSource(event.target.value) })}
-                  disabled={setProviderSource.isPending}
-                >
-                  <option value="host">Windows</option>
-                  {entry.wsl.filter((candidate) => candidate.present).map((candidate) => (
-                    <option key={candidate.distro} value={`wsl:${candidate.distro}`}>WSL: {candidate.distro}</option>
-                  ))}
-                </select>
-              </div>
-            ))}
+            <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">{t.settings.dataSourceSection.title}</h3>
+            {sourceOptions.map((entry) => {
+              const entryId = entry.id ?? entry.kind;
+              const parsed = parseProviderId(entryId);
+              return (
+                <div key={entryId} className="mt-2.5 flex items-center gap-2.5">
+                  <label className="min-w-24 text-dim" htmlFor={`source-${entryId}`}>{parsed.displayName}</label>
+                  <select id={`source-${entryId}`} className="cursor-pointer border border-line2 bg-surface px-2.5 py-1.5 text-fg"
+                    value={sourceValue(entry.source)}
+                    onChange={(event) => setProviderSource.mutate({ kind: entryId, source: parseSource(event.target.value) })}
+                    disabled={setProviderSource.isPending}
+                  >
+                    <option value="host">{t.common.windows}</option>
+                    {entry.wsl.filter((candidate) => candidate.present).map((candidate) => (
+                      <option key={candidate.distro} value={`wsl:${candidate.distro}`}>{t.common.wslDistro}: {candidate.distro}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
           </section>
         )}
 
         <section className="mt-6">
-          <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">Providers</h3>
+          <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">{t.settings.providersSection.title}</h3>
           {usageData.map((provider) => {
-            const enabled = settingsData?.enabledProviders.includes(provider.kind) ?? true;
-            const hidden = settingsData?.hiddenUsageWindowTitles[provider.kind] ?? [];
-            return <article key={provider.kind} className="mt-3 border-t border-line pt-3">
-              <div className="flex items-center justify-between gap-3"><strong>{provider.kind}</strong><label className="flex items-center gap-2 text-dim"><input type="checkbox" checked={enabled} onChange={(event) => void window.metria.setProviderEnabled(provider.kind, event.target.checked).then((next) => queryClient.setQueryData(["settings"], next))} /> Use this provider</label></div>
-              <div className="mt-2 grid gap-2">{WINDOW_TITLES[provider.kind].map((title) => <label key={title} className="flex items-center gap-2 text-sm text-dim"><input type="checkbox" checked={!hidden.includes(title)} onChange={(event) => setWindowVisible.mutate({ kind: provider.kind, title, visible: event.target.checked })} /> Show {title}</label>)}</div>
-              <div className="mt-3 flex flex-wrap gap-2"><button type="button" className="border border-line2 bg-transparent px-3 py-1.5 text-fg" onClick={() => void diagnose.mutate(provider.kind)}>Diagnose</button><button type="button" className="border border-line2 bg-transparent px-3 py-1.5 text-fg" onClick={() => void window.metria.reconnect(provider.kind).then((result) => setNotice(result.message))}>Reconnect</button></div>
+            const parsed = parseProviderId(provider.id || provider.kind);
+            const enabled = settingsData ? (
+              settingsData.enabledProviders.includes(provider.id) ||
+              (provider.id === provider.kind && settingsData.enabledProviders.includes(provider.kind))
+            ) : true;
+            const hidden = settingsData?.hiddenUsageWindowTitles[provider.id] ?? settingsData?.hiddenUsageWindowTitles[provider.kind] ?? [];
+            const titles = WINDOW_TITLES[provider.kind] ?? [];
+            return <article key={provider.id || provider.kind} className="mt-3 border-t border-line pt-3">
+              <div className="flex items-center justify-between gap-3"><strong>{parsed.displayName}</strong><label className="flex items-center gap-2 text-dim"><input type="checkbox" checked={enabled} onChange={(event) => void window.metria.setProviderEnabled(provider.id || provider.kind, event.target.checked).then((next) => queryClient.setQueryData(["settings"], next))} /> {t.settings.providersSection.useProvider}</label></div>
+              <div className="mt-2 grid gap-2">{titles.map((title) => <label key={title} className="flex items-center gap-2 text-sm text-dim"><input type="checkbox" checked={!hidden.includes(title)} onChange={(event) => setWindowVisible.mutate({ kind: provider.id || provider.kind, title, visible: event.target.checked })} /> {t.settings.providersSection.showWindow} {translateTitle(title)}</label>)}</div>
+              <div className="mt-3 flex flex-wrap gap-2"><button type="button" className="border border-line2 bg-transparent px-3 py-1.5 text-fg" onClick={() => void diagnose.mutate(provider.id || provider.kind)}>{t.settings.providersSection.diagnose}</button><button type="button" className="border border-line2 bg-transparent px-3 py-1.5 text-fg" onClick={() => void window.metria.reconnect(provider.id || provider.kind).then((result) => setNotice(result.message))}>{t.settings.providersSection.reconnect}</button></div>
               {provider.error && <p className="mt-2 text-accent">{provider.error}</p>}
-              <p className="mt-2 text-xs text-dim">{provider.updatedAt ? `Last update: ${new Date(provider.updatedAt).toLocaleString()}` : provider.setupHint}</p>
+              <p className="mt-2 text-xs text-dim">{provider.updatedAt ? `${t.settings.providersSection.lastUpdate}: ${new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }).format(new Date(provider.updatedAt))}` : provider.setupHint}</p>
             </article>;
           })}
-          <p className="mt-3 text-xs text-dim">Keep at least one provider enabled and one usage window visible per provider.</p>
+          <p className="mt-3 text-xs text-dim">{t.settings.providersSection.keepOneNotice}</p>
         </section>
 
         <section className="mt-6">
-          <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">Updates</h3>
+          <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">{t.settings.updatesSection.title}</h3>
           <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
             <button type="button" className="cursor-pointer border border-line2 bg-transparent px-3 py-1.5 text-[#d8d8dc] disabled:opacity-55"
               onClick={() => void checkUpdates.mutate()} disabled={checkUpdates.isPending}>
-              {checkUpdates.isPending ? "Checking…" : "Check for updates"}
+              {checkUpdates.isPending ? t.settings.updatesSection.checking : t.settings.updatesSection.checkUpdates}
             </button>
             {updateStatus === "downloaded" &&
               <button type="button" className="cursor-pointer border border-accent px-3 py-1.5 text-accent"
-                onClick={() => void installUpdate.mutate()} disabled={installUpdate.isPending}>Restart &amp; install update</button>}
+                onClick={() => void installUpdate.mutate()} disabled={installUpdate.isPending}>{t.settings.updatesSection.restartAndInstall}</button>}
           </div>
         </section>
 
         <section className="mt-6">
-          <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">Startup</h3>
+          <h3 className="m-0 text-sm font-semibold uppercase tracking-wider text-dim">{t.settings.startupSection.title}</h3>
           <button type="button" role="switch" aria-checked={loginItem.data?.enabled ?? false}
             className="mt-2.5 cursor-pointer border border-line2 bg-transparent px-3 py-1.5 text-[#d8d8dc] disabled:opacity-55"
             onClick={() => setLoginItem.mutate(!(loginItem.data?.enabled ?? false))}
             disabled={setLoginItem.isPending}>
-            {loginItem.data?.enabled ? "Launches at login" : "Starts manually"}
+            {loginItem.data?.enabled ? t.settings.startupSection.launchesAtLogin : t.settings.startupSection.startsManually}
           </button>
         </section>
 
@@ -315,10 +369,10 @@ function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
           <div className="flex flex-wrap gap-2.5">
             {(info?.platform === "win32" || info?.platform === "linux") && (
               <button type="button" className="cursor-pointer border border-[#ff453a]/60 px-3 py-1.5 text-[#ff6961]"
-                onClick={() => void uninstall.mutate()} disabled={uninstall.isPending}>Uninstall</button>
+                onClick={() => void uninstall.mutate()} disabled={uninstall.isPending}>{t.settings.dangerSection.uninstall}</button>
             )}
             <button type="button" className="cursor-pointer border border-line2 bg-transparent px-3 py-1.5 text-[#d8d8dc]"
-              onClick={() => void quit.mutate()} disabled={quit.isPending}>Quit Metria Electron</button>
+              onClick={() => void quit.mutate()} disabled={quit.isPending}>{t.settings.dangerSection.quitApp}</button>
           </div>
         </section>
 
@@ -329,8 +383,9 @@ function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
 }
 
 function Dashboard(): JSX.Element {
+  const { t, locale } = useI18n();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [status, setStatus] = useState("Loading provider usage…");
+  const [status, setStatus] = useState(t.dashboard.loadingUsage);
   const usage = useQuery({
     queryKey: ["usage"],
     queryFn: () => window.metria.refresh()
@@ -342,22 +397,22 @@ function Dashboard(): JSX.Element {
   const sources = useProviderSources();
   const needsSourceChoice = (sources.data ?? []).some((info) => info.needsChoice);
   useEffect(() => {
-    if (usage.isFetching) setStatus("Refreshing usage…");
-    else if (usage.isError) setStatus("Metria could not refresh usage.");
-    else if (usage.isSuccess) setStatus(`Updated ${new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(new Date())}`);
-  }, [usage.status, usage.isFetching, usage.isSuccess, usage.isError]);
+    if (usage.isFetching) setStatus(t.dashboard.refreshingUsage);
+    else if (usage.isError) setStatus(t.dashboard.errorUsage);
+    else if (usage.isSuccess) setStatus(`${t.dashboard.updatedAt} ${new Intl.DateTimeFormat(locale, { timeStyle: "short" }).format(new Date())}`);
+  }, [usage.status, usage.isFetching, usage.isSuccess, usage.isError, t, locale]);
   useEffect(() => { window.metria.onOpenSettings(() => setSettingsOpen(true)); }, []);
   return (
     <main className="mx-auto max-w-[880px] px-[clamp(24px,5vw,56px)] py-[clamp(24px,5vw,56px)]">
       <header className="flex items-center justify-between gap-6 border-b border-line pb-[22px]">
         <h1 className="m-0 text-[clamp(28px,4.6vw,46px)] leading-none tracking-[-0.07em]">
           <img className="mr-2.5 inline h-10 w-10 object-contain align-[-7px]" src="./metria-logo.png" alt="Metria" />
-          Metria
+          {t.dashboard.title}
         </h1>
         <div className="flex items-center gap-2.5">
           <button
             type="button"
-            aria-label="Refresh usage"
+            aria-label={t.dashboard.refreshTooltip}
             className="cursor-pointer rounded-full bg-[#e8edf3] p-2.5 text-[#10151b] focus-visible:outline-[3px] focus-visible:outline-offset-[3px] focus-visible:outline-accent disabled:opacity-55"
             onClick={() => void usage.refetch()}
             disabled={usage.isFetching}
@@ -368,7 +423,7 @@ function Dashboard(): JSX.Element {
           </button>
           <button
             type="button"
-            aria-label="Settings"
+            aria-label={t.dashboard.settingsTooltip}
             className="cursor-pointer rounded-full border border-line2 p-2.5 text-[#d8d8dc] focus-visible:outline-[3px] focus-visible:outline-offset-[3px] focus-visible:outline-accent"
             onClick={() => setSettingsOpen(true)}
           >
@@ -380,9 +435,24 @@ function Dashboard(): JSX.Element {
       </header>
       <p className="mb-[30px] mt-[18px] text-dim" role="status">{status}</p>
       <section aria-live="polite">
-        {(usage.data ?? []).map((provider) => (
-          <ProviderCard key={provider.kind} provider={provider} enabled={settings.data?.enabledProviders.includes(provider.kind) ?? true} showAccount={settings.data?.showAccountLabels ?? true} hiddenWindows={settings.data?.hiddenUsageWindowTitles[provider.kind] ?? []} alerts={settings.data?.alerts} onStatus={setStatus} />
-        ))}
+        {(usage.data ?? []).map((provider) => {
+          const enabled = settings.data ? (
+            settings.data.enabledProviders.includes(provider.id) ||
+            (provider.id === provider.kind && settings.data.enabledProviders.includes(provider.kind))
+          ) : true;
+          const hiddenWindows = settings.data?.hiddenUsageWindowTitles[provider.id] ?? settings.data?.hiddenUsageWindowTitles[provider.kind] ?? [];
+          return (
+            <ProviderCard
+              key={provider.id || provider.kind}
+              provider={provider}
+              enabled={enabled}
+              showAccount={settings.data?.showAccountLabels ?? true}
+              hiddenWindows={hiddenWindows}
+              alerts={settings.data?.alerts}
+              onStatus={setStatus}
+            />
+          );
+        })}
       </section>
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {needsSourceChoice && <SourceChoiceModal />}

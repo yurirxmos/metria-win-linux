@@ -1,8 +1,11 @@
 import { app } from "electron";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { ALL_PROVIDER_KINDS, DEFAULT_REFRESH_INTERVAL_SECONDS, DEFAULT_WIDGET_Y_OFFSET, isProviderKind } from "../shared/types";
+import { ALL_PROVIDER_KINDS, DEFAULT_REFRESH_INTERVAL_SECONDS, DEFAULT_WIDGET_Y_OFFSET, isProviderKind, isValidProviderId, parseProviderId } from "../shared/types";
 import type { AlertSettings, AppSettings, ProviderKind, ProviderSourceChoice } from "../shared/types";
+
+export { isValidProviderId };
 
 const defaults: AppSettings = {
   refreshIntervalSeconds: DEFAULT_REFRESH_INTERVAL_SECONDS,
@@ -17,20 +20,29 @@ const defaults: AppSettings = {
   widgetSize: "medium",
   widgetOpacity: 1,
   widgetDisplayId: null,
+  locale: "system",
   providerSource: {},
   hiddenUsageWindowTitles: {},
   alerts: { enabled: true, cautionThreshold: 40, warningThreshold: 65, criticalThreshold: 85, cautionColor: "#ffd60a", warningColor: "#ff9f0a", criticalColor: "#ff453a" }
 };
 
 export class SettingsStore {
-  private readonly path = join(app.getPath("userData"), "settings.json");
+  private readonly path: string;
+
+  constructor(customPath?: string) {
+    this.path =
+      customPath ??
+      (app?.getPath
+        ? join(app.getPath("userData"), "settings.json")
+        : join(tmpdir(), `metria-settings-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`));
+  }
 
   load(): AppSettings {
     try {
       const parsed = JSON.parse(readFileSync(this.path, "utf8")) as Partial<AppSettings>;
       return {
         refreshIntervalSeconds: Number.isFinite(parsed.refreshIntervalSeconds) ? Math.max(60, Number(parsed.refreshIntervalSeconds)) : defaults.refreshIntervalSeconds,
-        enabledProviders: Array.isArray(parsed.enabledProviders) ? parsed.enabledProviders.filter(isProviderKind) : defaults.enabledProviders,
+        enabledProviders: Array.isArray(parsed.enabledProviders) ? parsed.enabledProviders.filter(isValidProviderId) : defaults.enabledProviders,
         widgetYOffset: Number.isFinite(parsed.widgetYOffset) && Number(parsed.widgetYOffset) >= 0 ? Number(parsed.widgetYOffset) : defaults.widgetYOffset,
         widgetAlongEdgeOffset: numberOr(parsed.widgetAlongEdgeOffset, defaults.widgetAlongEdgeOffset),
         showWidget: typeof parsed.showWidget === "boolean" ? parsed.showWidget : defaults.showWidget,
@@ -41,6 +53,7 @@ export class SettingsStore {
         widgetSize: ["small", "medium", "large"].includes(parsed.widgetSize as string) ? parsed.widgetSize as AppSettings["widgetSize"] : defaults.widgetSize,
         widgetOpacity: Math.min(1, Math.max(0.35, numberOr(parsed.widgetOpacity, defaults.widgetOpacity))),
         widgetDisplayId: typeof parsed.widgetDisplayId === "string" ? parsed.widgetDisplayId : defaults.widgetDisplayId,
+        locale: parsed.locale === "en-US" || parsed.locale === "pt-BR" || parsed.locale === "system" ? parsed.locale : defaults.locale,
         providerSource: normalizeProviderSource(parsed.providerSource),
         hiddenUsageWindowTitles: normalizeHiddenWindows(parsed.hiddenUsageWindowTitles),
         alerts: normalizeAlerts(parsed.alerts)
@@ -50,7 +63,7 @@ export class SettingsStore {
 
   setWidgetYOffset(widgetYOffset: number): AppSettings { return this.save({ ...this.load(), widgetYOffset, widgetAlongEdgeOffset: widgetYOffset }); }
 
-  setWidgetPreferences(preferences: Partial<Pick<AppSettings, "showWidget" | "showTray" | "showAccountLabels" | "widgetBehavior" | "widgetPosition" | "widgetSize" | "widgetOpacity" | "widgetDisplayId" | "alerts">>): AppSettings {
+  setWidgetPreferences(preferences: Partial<Pick<AppSettings, "showWidget" | "showTray" | "showAccountLabels" | "widgetBehavior" | "widgetPosition" | "widgetSize" | "widgetOpacity" | "widgetDisplayId" | "alerts" | "locale">>): AppSettings {
     const current = this.load();
     const next = { ...current, ...preferences };
     if (preferences.widgetPosition && preferences.widgetPosition !== current.widgetPosition) {
@@ -61,13 +74,21 @@ export class SettingsStore {
     return this.save(next);
   }
 
-  setWindowVisible(kind: ProviderKind, title: string, visible: boolean): AppSettings {
+  setWindowVisible(kind: ProviderKind | string, title: string, visible: boolean): AppSettings {
     const current = this.load();
-    const knownTitles = kind === "OpenCode Go" ? ["Current session", "This week", "This month"] : ["Current session", "All models"];
+    const parsed = parseProviderId(kind);
+    const knownTitles =
+      parsed.kind === "OpenCode Go"
+        ? ["Current session", "This week", "This month"]
+        : parsed.kind === "Antigravity"
+          ? ["5-hour Gemini", "Weekly Gemini", "5-hour other models", "Weekly other models"]
+          : parsed.kind === "Cursor"
+            ? ["Cursor models", "API usage", "This cycle"]
+            : ["Current session", "All models"];
     if (!knownTitles.includes(title)) return current;
-    const hidden = new Set(current.hiddenUsageWindowTitles[kind] ?? []);
+    const hidden = new Set(current.hiddenUsageWindowTitles[kind] ?? current.hiddenUsageWindowTitles[parsed.kind] ?? []);
     if (visible) hidden.delete(title);
-    else if (hidden.size < (kind === "OpenCode Go" ? 2 : 1)) hidden.add(title);
+    else if (hidden.size < knownTitles.length - 1) hidden.add(title);
     return this.save({ ...current, hiddenUsageWindowTitles: { ...current.hiddenUsageWindowTitles, [kind]: [...hidden] } });
   }
 
@@ -75,7 +96,7 @@ export class SettingsStore {
     return this.save({ ...this.load(), refreshIntervalSeconds: Math.max(60, Math.round(seconds)) });
   }
 
-  setProviderSource(kind: ProviderKind, source: ProviderSourceChoice): AppSettings {
+  setProviderSource(kind: ProviderKind | string, source: ProviderSourceChoice): AppSettings {
     const current = this.load();
     return this.save({ ...current, providerSource: { ...current.providerSource, [kind]: source } });
   }
@@ -88,7 +109,7 @@ export class SettingsStore {
     return this.load();
   }
 
-  setProviderEnabled(kind: ProviderKind, enabled: boolean): AppSettings {
+  setProviderEnabled(kind: ProviderKind | string, enabled: boolean): AppSettings {
     const current = this.load();
     const enabledProviders = enabled
       ? [...new Set([...current.enabledProviders, kind])]
@@ -98,27 +119,34 @@ export class SettingsStore {
   }
 }
 
-function normalizeProviderSource(value: unknown): Partial<Record<ProviderKind, ProviderSourceChoice>> {
+export function normalizeProviderSource(value: unknown): Partial<Record<string, ProviderSourceChoice>> {
   if (typeof value !== "object" || value === null) return {};
   const source = value as Record<string, unknown>;
-  const normalized: Partial<Record<ProviderKind, ProviderSourceChoice>> = {};
-  ALL_PROVIDER_KINDS.forEach((kind) => {
-    const entry = source[kind];
-    if (typeof entry !== "object" || entry === null) return;
+  const normalized: Partial<Record<string, ProviderSourceChoice>> = {};
+  for (const [key, entry] of Object.entries(source)) {
+    if (!isValidProviderId(key)) continue;
+    if (typeof entry !== "object" || entry === null) continue;
     const candidate = entry as Record<string, unknown>;
-    if (candidate.location === "host") normalized[kind] = { location: "host" };
-    else if (candidate.location === "wsl" && typeof candidate.distro === "string" && candidate.distro.length > 0) normalized[kind] = { location: "wsl", distro: candidate.distro };
-  });
+    if (candidate.location === "host") normalized[key] = { location: "host" };
+    else if (candidate.location === "wsl" && typeof candidate.distro === "string" && candidate.distro.length > 0) {
+      normalized[key] = { location: "wsl", distro: candidate.distro };
+    }
+  }
   return normalized;
 }
 
 function numberOr(value: unknown, fallback: number): number { return typeof value === "number" && Number.isFinite(value) ? value : fallback; }
 
-function normalizeHiddenWindows(value: unknown): Partial<Record<ProviderKind, string[]>> {
+export function normalizeHiddenWindows(value: unknown): Partial<Record<string, string[]>> {
   if (typeof value !== "object" || value === null) return {};
   const source = value as Record<string, unknown>;
-  const normalized: Partial<Record<ProviderKind, string[]>> = {};
-  ALL_PROVIDER_KINDS.forEach((kind) => { if (Array.isArray(source[kind])) normalized[kind] = source[kind].filter((title): title is string => typeof title === "string"); });
+  const normalized: Partial<Record<string, string[]>> = {};
+  for (const [key, list] of Object.entries(source)) {
+    if (!isValidProviderId(key)) continue;
+    if (Array.isArray(list)) {
+      normalized[key] = list.filter((title): title is string => typeof title === "string");
+    }
+  }
   return normalized;
 }
 
