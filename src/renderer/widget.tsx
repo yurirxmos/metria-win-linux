@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { clampPercent, DEFAULT_WIDGET_Y_OFFSET, parseProviderId, PROVIDER_LOGOS, WIDGET_ITEM_HEIGHT } from "../shared/types";
 import type { ProviderKind, ProviderUsage } from "../shared/types";
+import { getTranslations, resolveLocale } from "../shared/i18n";
 import "./app.css";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false } } });
@@ -75,6 +76,9 @@ function Widget(): JSX.Element {
     window.metria.onUsageChanged(() => { void queryClient.invalidateQueries({ queryKey: ["usage"] }); });
   }, []);
   const settings = useQuery({ queryKey: ["settings"], queryFn: () => window.metria.getSettings() });
+  const choice = settings.data?.locale ?? "system";
+  const locale = resolveLocale(choice, typeof navigator !== "undefined" ? navigator.language : undefined);
+  const t = getTranslations(locale);
   const [hovered, setHovered] = useState(false);
   const position = settings.data?.widgetPosition ?? "right";
   const vertical = position === "left" || position === "right";
@@ -146,7 +150,7 @@ function Widget(): JSX.Element {
   };
   return (
     <main className={`notch-rail relative flex h-full w-full select-none overflow-hidden transition-opacity duration-200 ${vertical ? "flex-col py-3" : "flex-row px-3"} cursor-grab active:cursor-grabbing notch-${position}`} style={{ opacity: (settings.data?.widgetOpacity ?? 1) * (autoHide && !hovered ? 0.55 : 1) }} onContextMenu={(event) => { event.preventDefault(); void window.metria.openWidgetMenu(); }} onMouseEnter={() => setHovered(true)} onMouseMove={() => setHovered(true)} onMouseLeave={() => setHovered(false)} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
-      {autoHide && !hovered && <span className="notch-hidden-hint absolute inset-0 flex items-center justify-center text-xs" aria-label="Hover to open widget">{position === "right" ? "<" : position === "left" ? ">" : position === "top" ? "v" : "^"}</span>}
+      {autoHide && !hovered && <span className="notch-hidden-hint absolute inset-0 flex items-center justify-center text-xs" aria-label={t.widget.hoverToOpen}>{position === "right" ? "<" : position === "left" ? ">" : position === "top" ? "v" : "^"}</span>}
       <section className={`notch-provider-list flex min-h-0 min-w-0 flex-1 items-center justify-center ${vertical ? "flex-col" : "flex-row"}`}>
         {displayed.map((provider, index) => {
           const parsed = parseProviderId(provider.id || provider.kind);
