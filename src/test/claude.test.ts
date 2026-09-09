@@ -309,7 +309,21 @@ test("ClaudeProvider fetchHost handles missing token, 401 expired, and non-ok st
 
     await assert.rejects(
       async () => provider.fetchHost(),
-      { message: "Claude Code credentials have expired. Run `claude auth login`." }
+      { message: `Claude Code credentials have expired. ${provider.hint}` }
+    );
+
+    // Profile with custom slug includes custom hint on 401
+    const workProfile: ClaudeProfile = {
+      slug: "work",
+      id: "Claude-work",
+      displayName: "Claude (work)",
+      configDirectory: dir,
+      accountFile: join(home, ".claude.json")
+    };
+    const workProvider = new ClaudeProvider(workProfile);
+    await assert.rejects(
+      async () => workProvider.fetchHost(),
+      { message: `Claude Code credentials have expired. ${workProvider.hint}` }
     );
 
     // 500 error
@@ -328,7 +342,44 @@ test("ClaudeProvider fetchHost handles missing token, 401 expired, and non-ok st
   }
 });
 
-test("ClaudeProvider fetchWsl fetches usage and handles WSL relative paths", async () => {
+test("ClaudeProvider fetchHost passes timeout signal and handles abort", async () => {
+  const home = mkdtempSync(join(tmpdir(), "claude-timeout-test-"));
+  const dir = join(home, ".claude");
+  mkdirSync(dir);
+  writeFileSync(
+    join(dir, ".credentials.json"),
+    JSON.stringify({ claudeAiOauth: { accessToken: "timeout-token" } })
+  );
+
+  const profile: ClaudeProfile = {
+    id: "Claude",
+    displayName: "Claude",
+    configDirectory: dir,
+    accountFile: join(home, ".claude.json")
+  };
+  const provider = new ClaudeProvider(profile);
+
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      assert.ok(init?.signal, "AbortSignal must be provided");
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    }) as typeof fetch;
+
+    await assert.rejects(
+      async () => provider.fetchHost(),
+      (err: Error) => {
+        assert.equal(err.name, "TimeoutError");
+        return true;
+      }
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("ClaudeProvider fetchWsl fetches usage and handles WSL relative paths and errors", async () => {
   const profile: ClaudeProfile = {
     slug: "work",
     id: "Claude-work",
@@ -358,6 +409,7 @@ test("ClaudeProvider fetchWsl fetches usage and handles WSL relative paths", asy
   try {
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       assert.equal(input.toString(), "https://api.anthropic.com/api/oauth/usage");
+      assert.ok(init?.signal, "AbortSignal must be provided in WSL fetch");
       const headers = init?.headers as Record<string, string>;
       assert.equal(headers["Authorization"], "Bearer wsl-work-token");
       return {
@@ -386,6 +438,18 @@ test("ClaudeProvider fetchWsl fetches usage and handles WSL relative paths", asy
   };
   await assert.rejects(
     async () => provider.fetchWsl(emptyShell, "Ubuntu"),
+    { message: "Claude Code credentials were not found in WSL." }
+  );
+
+  // Error case: shell.readFile throws (e.g. file not found)
+  const throwingShell: WslShell = {
+    ...mockShell,
+    readFile: async () => {
+      throw new Error("cat: .claude-work/.credentials.json: No such file or directory");
+    }
+  };
+  await assert.rejects(
+    async () => provider.fetchWsl(throwingShell, "Ubuntu"),
     { message: "Claude Code credentials were not found in WSL." }
   );
 });

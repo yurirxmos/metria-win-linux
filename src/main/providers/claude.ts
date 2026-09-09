@@ -92,29 +92,37 @@ export class ClaudeProvider {
     return Boolean(token);
   }
 
-  async fetchHost(): Promise<ProviderUsage> {
-    const { token, email } = readProfileCredentials(this.profile.configDirectory, this.profile.accountFile);
-    if (!token) throw new Error(`Claude credentials were not found. ${this.hint}`);
-
+  private async requestUsage(token: string, timeoutMs = 10_000): Promise<{
+    five_hour?: { utilization?: number; resets_at?: string };
+    seven_day?: { utilization?: number; resets_at?: string };
+  }> {
     const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
       headers: {
         Authorization: `Bearer ${token}`,
         "anthropic-beta": "oauth-2025-04-20",
         "User-Agent": "Metria-Electron/0.1"
-      }
+      },
+      signal: AbortSignal.timeout(timeoutMs)
     });
 
     if (res.status === 401) {
-      throw new Error("Claude Code credentials have expired. Run `claude auth login`.");
+      throw new Error(`Claude Code credentials have expired. ${this.hint}`);
     }
     if (!res.ok) {
       throw new Error(`The provider returned ${res.status}.`);
     }
 
-    const data = (await res.json()) as {
+    return (await res.json()) as {
       five_hour?: { utilization?: number; resets_at?: string };
       seven_day?: { utilization?: number; resets_at?: string };
     };
+  }
+
+  async fetchHost(): Promise<ProviderUsage> {
+    const { token, email } = readProfileCredentials(this.profile.configDirectory, this.profile.accountFile);
+    if (!token) throw new Error(`Claude credentials were not found. ${this.hint}`);
+
+    const data = await this.requestUsage(token);
 
     return {
       id: this.id,
@@ -133,7 +141,13 @@ export class ClaudeProvider {
 
   async fetchWsl(shell: WslShell, distro: string): Promise<ProviderUsage> {
     const relPath = this.profile.slug ? `.claude-${this.profile.slug}/.credentials.json` : ".claude/.credentials.json";
-    const credentials = await shell.readFile(distro, relPath);
+    let credentials: string;
+    try {
+      credentials = await shell.readFile(distro, relPath);
+    } catch {
+      throw new Error("Claude Code credentials were not found in WSL.");
+    }
+
     let token: string | undefined;
     let email: string | undefined;
     try {
@@ -153,15 +167,7 @@ export class ClaudeProvider {
 
     if (!token) throw new Error("Claude Code credentials were not found in WSL.");
 
-    const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
-      headers: { Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20", "User-Agent": "Metria-Electron/0.1" }
-    });
-
-    if (res.status === 401) {
-      throw new Error("Claude Code credentials have expired. Run `claude auth login`.");
-    }
-    if (!res.ok) throw new Error(`The provider returned ${res.status}.`);
-    const data = (await res.json()) as { five_hour?: { utilization?: number; resets_at?: string }; seven_day?: { utilization?: number; resets_at?: string } };
+    const data = await this.requestUsage(token);
 
     return {
       id: this.id,
