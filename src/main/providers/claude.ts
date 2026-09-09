@@ -11,6 +11,11 @@ export interface ClaudeProfile {
   accountFile: string;
 }
 
+export const ClaudeProfile = {
+  discover: discoverClaudeProfiles
+};
+
+
 const PROFILE_MARKERS = ["sessions", "projects", "settings.json", "history.jsonl", ".claude.json", ".credentials.json"];
 
 export function discoverClaudeProfiles(home: string): ClaudeProfile[] {

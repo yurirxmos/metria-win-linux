@@ -33,7 +33,7 @@ export interface AlertSettings {
 
 export interface AppSettings {
   refreshIntervalSeconds: number;
-  enabledProviders: ProviderKind[];
+  enabledProviders: string[];
   widgetYOffset: number;
   widgetAlongEdgeOffset: number;
   showWidget: boolean;
@@ -44,8 +44,8 @@ export interface AppSettings {
   widgetSize: WidgetSize;
   widgetOpacity: number;
   widgetDisplayId: string | null;
-  providerSource: Partial<Record<ProviderKind, ProviderSourceChoice>>;
-  hiddenUsageWindowTitles: Partial<Record<ProviderKind, string[]>>;
+  providerSource: Partial<Record<string, ProviderSourceChoice>>;
+  hiddenUsageWindowTitles: Partial<Record<string, string[]>>;
   alerts: AlertSettings;
 }
 
@@ -67,11 +67,11 @@ export interface MetriaApi {
   onOpenSettings(callback: () => void): void;
   onCardShow(callback: (payload: CardShowPayload) => void): void;
   onCardHide(callback: () => void): void;
-  setProviderEnabled(kind: ProviderKind, enabled: boolean): Promise<AppSettings>;
+  setProviderEnabled(kind: ProviderKind | string, enabled: boolean): Promise<AppSettings>;
   reconnect(kind: ProviderKind): Promise<{ command: string; message: string }>;
   setWidgetYOffset(offsetY: number): Promise<AppSettings>;
   setWidgetPreferences(preferences: Partial<Pick<AppSettings, "showWidget" | "showTray" | "showAccountLabels" | "widgetBehavior" | "widgetPosition" | "widgetSize" | "widgetOpacity" | "widgetDisplayId" | "alerts">>): Promise<AppSettings>;
-  setWindowVisible(kind: ProviderKind, title: string, visible: boolean): Promise<AppSettings>;
+  setWindowVisible(kind: ProviderKind | string, title: string, visible: boolean): Promise<AppSettings>;
   diagnose(kind: ProviderKind): Promise<string>;
   getLoginItemStatus(): Promise<LoginItemStatus>;
   setLaunchAtLogin(enabled: boolean): Promise<LoginItemStatus>;
@@ -83,7 +83,7 @@ export interface MetriaApi {
   quit(): Promise<void>;
   setRefreshInterval(seconds: number): Promise<AppSettings>;
   getProviderSources(): Promise<ProviderSourceInfo[]>;
-  setProviderSource(kind: ProviderKind, source: ProviderSourceChoice): Promise<AppSettings>;
+  setProviderSource(kind: ProviderKind | string, source: ProviderSourceChoice): Promise<AppSettings>;
 }
 
 export interface DisplayInfo { id: string; label: string; }
@@ -118,6 +118,7 @@ export interface WslPresence {
 }
 
 export interface ProviderSourceInfo {
+  id?: string;
   kind: ProviderKind;
   host: boolean;
   wsl: WslPresence[];
