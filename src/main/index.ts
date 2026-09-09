@@ -2,9 +2,10 @@ import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, shell, Tray } f
 import { autoUpdater } from "electron-updater";
 import { dirname, join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { ALL_PROVIDER_KINDS, CARD_WIDTH, isProviderKind, PROVIDER_LOGOS, providerShortLabel, WIDGET_ITEM_GAP, WIDGET_ITEM_HEIGHT, WIDGET_PADDING, WIDGET_WIDTH } from "../shared/types";
+import { ALL_PROVIDER_KINDS, CARD_WIDTH, isProviderKind, isValidProviderId, parseProviderId, PROVIDER_LOGOS, providerShortLabel, WIDGET_ITEM_GAP, WIDGET_ITEM_HEIGHT, WIDGET_PADDING, WIDGET_WIDTH } from "../shared/types";
 import { ProviderService } from "./providers";
 import { SettingsStore } from "./settings";
+import { diagnoseProvider } from "./diagnostics";
 import type { AppSettings, ProviderKind, ProviderSourceChoice, ProviderUsage } from "../shared/types";
 
 let window: BrowserWindow | undefined;
@@ -430,8 +431,9 @@ function requireTrustedSender(event: Electron.IpcMainInvokeEvent): void {
 // The dashboard must show every provider (enabled or not) so users can re-enable
 // from there; taps, badges, and the widget keep filtering by enabledProviders.
 async function usage() {
-  const values = (await providers.fetch(ALL_PROVIDER_KINDS)).map((value) => {
-    const cached = lastUsage.find((entry) => entry.kind === value.kind);
+  const targets = providers.getProviders().map((p) => p.id);
+  const values = (await providers.fetch(targets)).map((value) => {
+    const cached = lastUsage.find((entry) => entry.id === value.id || entry.kind === value.kind);
     return value.error && cached?.windows.length ? { ...value, accountLabel: value.accountLabel ?? cached.accountLabel, windows: cached.windows, updatedAt: cached.updatedAt } : value;
   });
   lastUsage = values;
@@ -514,18 +516,38 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   ipcMain.handle("metria:refresh", (event) => { requireTrustedSender(event); return usage(); });
   ipcMain.handle("metria:get-settings", (event) => { requireTrustedSender(event); return settings.load(); });
   ipcMain.handle("metria:set-provider-enabled", (event, kind: unknown, enabled: unknown) => {
-    requireTrustedSender(event); if (!isProviderKind(kind) || typeof enabled !== "boolean") throw new Error("Invalid provider setting.");
+    requireTrustedSender(event); if (!isValidProviderId(kind) || typeof enabled !== "boolean") throw new Error("Invalid provider setting.");
     const next = settings.setProviderEnabled(kind, enabled);
     // The widget (notch) keeps its own settings snapshot; refresh it and the bounds now.
     updateWidgetBounds(lastUsage);
     broadcastSettings();
     return next;
   });
-  ipcMain.handle("metria:reconnect", async (event, kind: unknown) => {
-    requireTrustedSender(event); if (!isProviderKind(kind)) throw new Error("Invalid provider.");
-    const command = kind === "Claude" ? "claude auth login" : kind === "Codex" ? "codex login" : "opencode auth login";
+  ipcMain.handle("metria:reconnect", async (event, rawId: unknown) => {
+    requireTrustedSender(event);
+    const parsed = parseProviderId(String(rawId));
+    let command = "";
+    let message = "";
+
+    if (parsed.kind === "Claude") {
+      command = parsed.slug ? `CLAUDE_CONFIG_DIR=~/.claude-${parsed.slug} claude auth login` : "claude auth login";
+      message = `Run \`${command}\` in your terminal, then refresh Metria.`;
+    } else if (parsed.kind === "Codex") {
+      command = "codex login";
+      message = `Run \`${command}\` in your terminal, then refresh Metria.`;
+    } else if (parsed.kind === "OpenCode Go") {
+      command = "opencode auth login";
+      message = `Run \`${command}\` in your terminal, then refresh Metria.`;
+    } else if (parsed.kind === "Antigravity") {
+      command = "agy auth login";
+      message = `Run \`${command}\` in your terminal, then refresh Metria.`;
+    } else if (parsed.kind === "Cursor") {
+      command = "cursor";
+      message = "Open Cursor and make sure you are signed in, then refresh Metria.";
+    }
+
     await shell.openPath(app.getPath("home"));
-    return { command, message: `Run \`${command}\` in your terminal, then refresh Metria.` };
+    return { command, message };
   });
   ipcMain.handle("metria:set-widget-y-offset", (event, offsetY: unknown) => {
     requireTrustedSender(event);
@@ -554,17 +576,22 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   });
   ipcMain.handle("metria:set-window-visible", (event, kind: unknown, title: unknown, visible: unknown) => {
     requireTrustedSender(event);
-    if (!isProviderKind(kind) || typeof title !== "string" || !title || typeof visible !== "boolean") throw new Error("Invalid usage window setting.");
+    if (!isValidProviderId(kind) || typeof title !== "string" || !title || typeof visible !== "boolean") throw new Error("Invalid usage window setting.");
     const next = settings.setWindowVisible(kind, title, visible);
     broadcastSettings();
     return next;
   });
-  ipcMain.handle("metria:diagnose", async (event, kind: unknown) => {
+  ipcMain.handle("metria:diagnose", async (event, rawId: unknown) => {
     requireTrustedSender(event);
-    if (!isProviderKind(kind)) throw new Error("Invalid provider.");
-    const info = (await providers.sources([kind]))[0];
-    const usage = lastUsage.find((entry) => entry.kind === kind);
-    return [info.host ? "Host credentials detected." : "No host credentials detected.", info.wsl.filter((entry) => entry.present).map((entry) => `WSL ${entry.distro} data detected.`).join(" "), usage ? `${usage.windows.length} usage window(s) returned.` : "Metria has not received usage data yet.", usage?.updatedAt ? `Last update: ${new Date(usage.updatedAt).toLocaleString()}` : "", usage?.error ? `Latest issue: ${usage.error}` : ""].filter(Boolean).join("\n");
+    const parsed = parseProviderId(String(rawId));
+    const info = (await providers.sources([parsed.id]))[0];
+    const usage = lastUsage.find((entry) => entry.id === parsed.id) ?? lastUsage.find((entry) => entry.kind === parsed.kind);
+    return diagnoseProvider({
+      providerId: parsed.id,
+      sourceInfo: info,
+      usage,
+      paths: providers.paths
+    });
   });
   ipcMain.handle("metria:get-login-item-status", (event) => { requireTrustedSender(event); return loginItemStatus(); });
   ipcMain.handle("metria:app-info", (event) => {
@@ -623,11 +650,11 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   });
   ipcMain.handle("metria:get-provider-sources", (event) => {
     requireTrustedSender(event);
-    return providers.sources(ALL_PROVIDER_KINDS);
+    return providers.sources(providers.getProviders().map((p) => p.id));
   });
   ipcMain.handle("metria:set-provider-source", (event, kind: unknown, source: unknown) => {
     requireTrustedSender(event);
-    if (!isProviderKind(kind) || !validProviderSource(source)) throw new Error("Invalid provider source.");
+    if (!isValidProviderId(kind) || !validProviderSource(source)) throw new Error("Invalid provider source.");
     const next = settings.setProviderSource(kind, source);
     updateWidgetBounds(lastUsage);
     widgetWindow?.webContents.send("metria:settings-changed");

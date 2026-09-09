@@ -68,11 +68,11 @@ export interface MetriaApi {
   onCardShow(callback: (payload: CardShowPayload) => void): void;
   onCardHide(callback: () => void): void;
   setProviderEnabled(kind: ProviderKind | string, enabled: boolean): Promise<AppSettings>;
-  reconnect(kind: ProviderKind): Promise<{ command: string; message: string }>;
+  reconnect(kind: ProviderKind | string): Promise<{ command: string; message: string }>;
   setWidgetYOffset(offsetY: number): Promise<AppSettings>;
   setWidgetPreferences(preferences: Partial<Pick<AppSettings, "showWidget" | "showTray" | "showAccountLabels" | "widgetBehavior" | "widgetPosition" | "widgetSize" | "widgetOpacity" | "widgetDisplayId" | "alerts">>): Promise<AppSettings>;
   setWindowVisible(kind: ProviderKind | string, title: string, visible: boolean): Promise<AppSettings>;
-  diagnose(kind: ProviderKind): Promise<string>;
+  diagnose(kind: ProviderKind | string): Promise<string>;
   getLoginItemStatus(): Promise<LoginItemStatus>;
   setLaunchAtLogin(enabled: boolean): Promise<LoginItemStatus>;
   getAppInfo(): Promise<AppInfo>;
@@ -149,6 +149,13 @@ export function isProviderKind(value: unknown): value is ProviderKind {
     value === "Cursor" ||
     value === "Antigravity"
   );
+}
+
+export function isValidProviderId(value: unknown): value is string {
+  if (typeof value !== "string" || !value.trim()) return false;
+  if (isProviderKind(value)) return true;
+  const parsed = parseProviderId(value);
+  return isProviderKind(parsed.kind) && value.startsWith(`${parsed.kind}-`);
 }
 
 export const PROVIDER_LOGOS: Record<ProviderKind, string> = {

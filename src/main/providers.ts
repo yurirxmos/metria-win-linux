@@ -22,6 +22,7 @@ export type { Provider } from "./providers/types";
 const defaultPaths: ProviderPaths = providerPaths({ platform: process.platform, home: homedir(), env: process.env });
 
 export class ProviderService {
+  readonly paths: ProviderPaths;
   private readonly registry: ProviderRegistry;
   private readonly presenceResults = new Map<string, { at: number; presence: WslProviderPresence }>();
 
@@ -31,6 +32,7 @@ export class ProviderService {
     paths: ProviderPaths = defaultPaths,
     providers?: Provider[] | ProviderRegistry
   ) {
+    this.paths = paths;
     if (providers instanceof ProviderRegistry) {
       this.registry = providers;
     } else if (Array.isArray(providers)) {

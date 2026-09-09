@@ -1,15 +1,10 @@
 import { app } from "electron";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ALL_PROVIDER_KINDS, DEFAULT_REFRESH_INTERVAL_SECONDS, DEFAULT_WIDGET_Y_OFFSET, isProviderKind, parseProviderId } from "../shared/types";
+import { ALL_PROVIDER_KINDS, DEFAULT_REFRESH_INTERVAL_SECONDS, DEFAULT_WIDGET_Y_OFFSET, isProviderKind, isValidProviderId, parseProviderId } from "../shared/types";
 import type { AlertSettings, AppSettings, ProviderKind, ProviderSourceChoice } from "../shared/types";
 
-export function isValidProviderId(value: unknown): value is string {
-  if (typeof value !== "string" || !value.trim()) return false;
-  if (isProviderKind(value)) return true;
-  const parsed = parseProviderId(value);
-  return isProviderKind(parsed.kind) && value.startsWith(`${parsed.kind}-`);
-}
+export { isValidProviderId };
 
 const defaults: AppSettings = {
   refreshIntervalSeconds: DEFAULT_REFRESH_INTERVAL_SECONDS,
