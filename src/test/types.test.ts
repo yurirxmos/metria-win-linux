@@ -32,3 +32,8 @@ test("parseProviderId parses single-account and multi-profile IDs", () => {
   const agy = parseProviderId("Antigravity");
   assert.deepEqual(agy, { kind: "Antigravity", id: "Antigravity", displayName: "Antigravity", slug: undefined });
 });
+
+test("parseProviderId handles empty slug gracefully", () => {
+  const claudeTrailingHyphen = parseProviderId("Claude-");
+  assert.deepEqual(claudeTrailingHyphen, { kind: "Claude", id: "Claude-", displayName: "Claude", slug: undefined });
+});

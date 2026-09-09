@@ -165,12 +165,13 @@ export function parseProviderId(raw: string): ProviderID {
     }
     const prefix = `${kind}-`;
     if (raw.startsWith(prefix)) {
-      const slug = raw.slice(prefix.length);
+      const extracted = raw.slice(prefix.length);
+      const slug = extracted || undefined;
       return {
         kind,
         slug,
         id: raw,
-        displayName: `${kind} (${slug})`
+        displayName: slug ? `${kind} (${slug})` : kind
       };
     }
   }

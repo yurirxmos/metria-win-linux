@@ -10,7 +10,9 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { refetchOnWind
 const ACCENT: Record<ProviderKind, string> = {
   "Claude": "#ff9f0a",
   "Codex": "#0a84ff",
-  "OpenCode Go": "#ffffff"
+  "OpenCode Go": "#ffffff",
+  "Cursor": "#8e8e93",
+  "Antigravity": "#3b82f6"
 };
 
 function primary(provider: ProviderUsage): number { return provider.windows[0]?.percent ?? 0; }

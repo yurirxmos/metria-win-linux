@@ -32,6 +32,7 @@ export class ProviderService {
     const entries = await this.sources(enabled);
     return Promise.all(entries.map(async (entry) => {
       const provider = this.providerFor(entry.kind);
+      if (!provider) return unavailable(entry.kind, "");
       const source = chooseSource(entry, entry.source);
       if (!source) return unavailable(entry.kind, provider.hint);
       try {
@@ -52,15 +53,15 @@ export class ProviderService {
     return kinds.map((kind) => {
       const populationKey = POPULATION_BY_KIND[kind];
       const wsl: WslPresence[] = distros.map((distro) => ({ distro, present: populationKey ? (presences.get(distro)?.[populationKey] ?? false) : false }));
-      const host = this.providerFor(kind).hasHostCredentials();
+      const host = this.providerFor(kind)?.hasHostCredentials() ?? false;
       const source = saved[kind] ?? null;
       const needsChoice = host && wsl.some((entry) => entry.present) && !source;
       return { kind, host, wsl, source, needsChoice };
     });
   }
 
-  private providerFor(kind: ProviderKind): Provider {
-    return this.providers.find((provider) => provider.kind === kind)!;
+  private providerFor(kind: ProviderKind): Provider | undefined {
+    return this.providers.find((provider) => provider.kind === kind);
   }
 
   private async presence(distro: string): Promise<WslProviderPresence> {
