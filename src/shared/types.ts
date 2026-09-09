@@ -1,4 +1,4 @@
-export type ProviderKind = "Claude" | "Codex" | "OpenCode Go";
+export type ProviderKind = "Claude" | "Codex" | "OpenCode Go" | "Cursor" | "Antigravity";
 
 export interface UsageWindow {
   title: string;
@@ -7,6 +7,7 @@ export interface UsageWindow {
 }
 
 export interface ProviderUsage {
+  id: string;
   kind: ProviderKind;
   accountLabel: string | null;
   windows: UsageWindow[];
@@ -124,17 +125,57 @@ export interface ProviderSourceInfo {
   needsChoice: boolean;
 }
 
-export const ALL_PROVIDER_KINDS: ProviderKind[] = ["Claude", "Codex", "OpenCode Go"];
+export interface ProviderID {
+  kind: ProviderKind;
+  slug?: string;
+  id: string;
+  displayName: string;
+}
+
+export const ALL_PROVIDER_KINDS: ProviderKind[] = [
+  "Claude",
+  "Codex",
+  "OpenCode Go",
+  "Cursor",
+  "Antigravity"
+];
 
 export function isProviderKind(value: unknown): value is ProviderKind {
-  return value === "Claude" || value === "Codex" || value === "OpenCode Go";
+  return (
+    value === "Claude" ||
+    value === "Codex" ||
+    value === "OpenCode Go" ||
+    value === "Cursor" ||
+    value === "Antigravity"
+  );
 }
 
 export const PROVIDER_LOGOS: Record<ProviderKind, string> = {
   "Claude": "claude-logo.png",
   "Codex": "codex-logo.png",
-  "OpenCode Go": "opencode-logo.png"
+  "OpenCode Go": "opencode-logo.png",
+  "Cursor": "cursor-logo.png",
+  "Antigravity": "antigravity-logo.png"
 };
+
+export function parseProviderId(raw: string): ProviderID {
+  for (const kind of ALL_PROVIDER_KINDS) {
+    if (raw === kind) {
+      return { kind, slug: undefined, id: kind, displayName: kind };
+    }
+    const prefix = `${kind}-`;
+    if (raw.startsWith(prefix)) {
+      const slug = raw.slice(prefix.length);
+      return {
+        kind,
+        slug,
+        id: raw,
+        displayName: `${kind} (${slug})`
+      };
+    }
+  }
+  return { kind: "Claude", slug: undefined, id: raw, displayName: raw };
+}
 
 export function providerShortLabel(kind: ProviderKind): string {
   return kind === "OpenCode Go" ? "Go" : kind;

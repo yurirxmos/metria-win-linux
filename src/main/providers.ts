@@ -50,7 +50,8 @@ export class ProviderService {
     const presences = new Map<string, WslProviderPresence>();
     for (const distro of distros) presences.set(distro, await this.presence(distro));
     return kinds.map((kind) => {
-      const wsl: WslPresence[] = distros.map((distro) => ({ distro, present: presences.get(distro)?.[POPULATION_BY_KIND[kind]] ?? false }));
+      const populationKey = POPULATION_BY_KIND[kind];
+      const wsl: WslPresence[] = distros.map((distro) => ({ distro, present: populationKey ? (presences.get(distro)?.[populationKey] ?? false) : false }));
       const host = this.providerFor(kind).hasHostCredentials();
       const source = saved[kind] ?? null;
       const needsChoice = host && wsl.some((entry) => entry.present) && !source;
@@ -71,7 +72,7 @@ export class ProviderService {
   }
 }
 
-const POPULATION_BY_KIND: Record<ProviderKind, keyof WslProviderPresence> = { Claude: "claude", Codex: "codex", "OpenCode Go": "openCode" };
+const POPULATION_BY_KIND: Partial<Record<ProviderKind, keyof WslProviderPresence>> = { Claude: "claude", Codex: "codex", "OpenCode Go": "openCode" };
 const WSL_DIR_BY_KIND: Partial<Record<ProviderKind, string>> = { Codex: ".codex/sessions" };
 
 /** Pick the data source for a provider given saved preference (if any) and presence. */
@@ -263,7 +264,7 @@ function readFileSyncPathOrEmpty(path: string): string {
   return newest ? readFileSync(newest, "utf8") : "";
 }
 
-function loaded(kind: ProviderKind, windows: UsageWindow[], accountLabel: string | null = null): ProviderUsage { return { kind, accountLabel, windows, updatedAt: new Date().toISOString(), error: null, available: true, setupHint: "" }; }
+function loaded(kind: ProviderKind, windows: UsageWindow[], accountLabel: string | null = null): ProviderUsage { return { id: kind, kind, accountLabel, windows, updatedAt: new Date().toISOString(), error: null, available: true, setupHint: "" }; }
 function empty(kind: ProviderKind): ProviderUsage { return { ...loaded(kind, []), error: "No current usage data was found." }; }
-function unavailable(kind: ProviderKind, setupHint: string): ProviderUsage { return { kind, accountLabel: null, windows: [], updatedAt: null, error: null, available: false, setupHint }; }
+function unavailable(kind: ProviderKind, setupHint: string): ProviderUsage { return { id: kind, kind, accountLabel: null, windows: [], updatedAt: null, error: null, available: false, setupHint }; }
 function maskKey(key: string): string { return key.length > 8 ? `${key.slice(0, 4)}...${key.slice(-4)}` : "********"; }
