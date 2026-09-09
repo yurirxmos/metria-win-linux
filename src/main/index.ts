@@ -267,11 +267,17 @@ function positionCard(index: number, height?: number): void {
 }
 
 interface UsageRow { name: string; percent: number; reset: string; logo: string; }
-function formatReset(resetDate: string | null): string {
+function formatReset(resetDate: string | null, locale: SupportedLocale = currentLocale()): string {
   if (!resetDate) return "";
   const seconds = (new Date(resetDate).getTime() - Date.now()) / 1000;
-  if (seconds > 0 && seconds < 86400) { const totalMinutes = Math.floor(seconds / 60); const hours = Math.floor(totalMinutes / 60); const minutes = totalMinutes % 60; return hours > 0 ? (minutes > 0 ? `${hours} hr ${minutes} min` : `${hours} hr`) : `${minutes} min`; }
-  return new Date(resetDate).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  if (seconds > 0 && seconds < 86400) {
+    const totalMinutes = Math.floor(seconds / 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (locale === "pt-BR") return hours > 0 ? (minutes > 0 ? `${hours} h ${minutes} min` : `${hours} h`) : `${minutes} min`;
+    return hours > 0 ? (minutes > 0 ? `${hours} hr ${minutes} min` : `${hours} hr`) : `${minutes} min`;
+  }
+  return new Date(resetDate).toLocaleDateString(locale, { weekday: "short", month: "short", day: "numeric" });
 }
 function findAsset(name: string): string | undefined {
   const candidates = app.isPackaged
@@ -285,13 +291,14 @@ function trayMenuIcon(name: string): Electron.NativeImage | undefined {
   return path ? nativeImage.createFromPath(path).resize({ width: 16, height: 16 }) : undefined;
 }
 function usageRows(providers: typeof lastUsage): UsageRow[] {
+  const locale = currentLocale();
   return visibleProviders(providers).filter((provider) => provider.windows[0]).map((provider) => {
     const parsed = parseProviderId(provider.id || provider.kind);
     const name = parsed.slug ? `${providerShortLabel(provider.kind)} (${parsed.slug})` : providerShortLabel(provider.kind);
     return {
       name,
       percent: Math.round(Math.max(0, Math.min(100, provider.windows[0]!.percent))),
-      reset: formatReset(provider.windows[0]!.resetDate),
+      reset: formatReset(provider.windows[0]!.resetDate, locale),
       logo: PROVIDER_LOGOS[provider.kind]
     };
   });
@@ -400,7 +407,7 @@ function createTray(): void {
  */
 function badgeStatus(provider: ProviderUsage): { percent: number; reset: string } {
   const first = provider.windows[0];
-  return { percent: Math.round(Math.max(0, Math.min(100, first?.percent ?? 0))), reset: formatReset(first?.resetDate ?? null) };
+  return { percent: Math.round(Math.max(0, Math.min(100, first?.percent ?? 0))), reset: formatReset(first?.resetDate ?? null, currentLocale()) };
 }
 function badgeTemplate(): Electron.MenuItemConstructorOptions[] {
   const t = getTranslations(currentLocale());
