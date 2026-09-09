@@ -1,4 +1,4 @@
-export type ProviderKind = "Claude" | "Codex" | "OpenCode Go";
+export type ProviderKind = "Claude" | "Codex" | "OpenCode Go" | "Cursor" | "Antigravity";
 
 export interface UsageWindow {
   title: string;
@@ -7,6 +7,7 @@ export interface UsageWindow {
 }
 
 export interface ProviderUsage {
+  id: string;
   kind: ProviderKind;
   accountLabel: string | null;
   windows: UsageWindow[];
@@ -19,6 +20,8 @@ export interface ProviderUsage {
 export type WidgetPosition = "top" | "bottom" | "left" | "right";
 export type WidgetSize = "small" | "medium" | "large";
 export type WidgetBehavior = "pinned" | "auto-hide";
+export type SupportedLocale = "en-US" | "pt-BR";
+export type LocaleChoice = "system" | "en-US" | "pt-BR";
 
 export interface AlertSettings {
   enabled: boolean;
@@ -32,7 +35,7 @@ export interface AlertSettings {
 
 export interface AppSettings {
   refreshIntervalSeconds: number;
-  enabledProviders: ProviderKind[];
+  enabledProviders: string[];
   widgetYOffset: number;
   widgetAlongEdgeOffset: number;
   showWidget: boolean;
@@ -43,8 +46,9 @@ export interface AppSettings {
   widgetSize: WidgetSize;
   widgetOpacity: number;
   widgetDisplayId: string | null;
-  providerSource: Partial<Record<ProviderKind, ProviderSourceChoice>>;
-  hiddenUsageWindowTitles: Partial<Record<ProviderKind, string[]>>;
+  locale: LocaleChoice;
+  providerSource: Partial<Record<string, ProviderSourceChoice>>;
+  hiddenUsageWindowTitles: Partial<Record<string, string[]>>;
   alerts: AlertSettings;
 }
 
@@ -66,12 +70,12 @@ export interface MetriaApi {
   onOpenSettings(callback: () => void): void;
   onCardShow(callback: (payload: CardShowPayload) => void): void;
   onCardHide(callback: () => void): void;
-  setProviderEnabled(kind: ProviderKind, enabled: boolean): Promise<AppSettings>;
-  reconnect(kind: ProviderKind): Promise<{ command: string; message: string }>;
+  setProviderEnabled(kind: ProviderKind | string, enabled: boolean): Promise<AppSettings>;
+  reconnect(kind: ProviderKind | string): Promise<{ command: string; message: string }>;
   setWidgetYOffset(offsetY: number): Promise<AppSettings>;
-  setWidgetPreferences(preferences: Partial<Pick<AppSettings, "showWidget" | "showTray" | "showAccountLabels" | "widgetBehavior" | "widgetPosition" | "widgetSize" | "widgetOpacity" | "widgetDisplayId" | "alerts">>): Promise<AppSettings>;
-  setWindowVisible(kind: ProviderKind, title: string, visible: boolean): Promise<AppSettings>;
-  diagnose(kind: ProviderKind): Promise<string>;
+  setWidgetPreferences(preferences: Partial<Pick<AppSettings, "showWidget" | "showTray" | "showAccountLabels" | "widgetBehavior" | "widgetPosition" | "widgetSize" | "widgetOpacity" | "widgetDisplayId" | "alerts" | "locale">>): Promise<AppSettings>;
+  setWindowVisible(kind: ProviderKind | string, title: string, visible: boolean): Promise<AppSettings>;
+  diagnose(kind: ProviderKind | string): Promise<string>;
   getLoginItemStatus(): Promise<LoginItemStatus>;
   setLaunchAtLogin(enabled: boolean): Promise<LoginItemStatus>;
   getAppInfo(): Promise<AppInfo>;
@@ -82,7 +86,7 @@ export interface MetriaApi {
   quit(): Promise<void>;
   setRefreshInterval(seconds: number): Promise<AppSettings>;
   getProviderSources(): Promise<ProviderSourceInfo[]>;
-  setProviderSource(kind: ProviderKind, source: ProviderSourceChoice): Promise<AppSettings>;
+  setProviderSource(kind: ProviderKind | string, source: ProviderSourceChoice): Promise<AppSettings>;
 }
 
 export interface DisplayInfo { id: string; label: string; }
@@ -117,6 +121,7 @@ export interface WslPresence {
 }
 
 export interface ProviderSourceInfo {
+  id?: string;
   kind: ProviderKind;
   host: boolean;
   wsl: WslPresence[];
@@ -124,17 +129,65 @@ export interface ProviderSourceInfo {
   needsChoice: boolean;
 }
 
-export const ALL_PROVIDER_KINDS: ProviderKind[] = ["Claude", "Codex", "OpenCode Go"];
+export interface ProviderID {
+  kind: ProviderKind;
+  slug?: string;
+  id: string;
+  displayName: string;
+}
+
+export const ALL_PROVIDER_KINDS: ProviderKind[] = [
+  "Claude",
+  "Codex",
+  "OpenCode Go",
+  "Cursor",
+  "Antigravity"
+];
 
 export function isProviderKind(value: unknown): value is ProviderKind {
-  return value === "Claude" || value === "Codex" || value === "OpenCode Go";
+  return (
+    value === "Claude" ||
+    value === "Codex" ||
+    value === "OpenCode Go" ||
+    value === "Cursor" ||
+    value === "Antigravity"
+  );
+}
+
+export function isValidProviderId(value: unknown): value is string {
+  if (typeof value !== "string" || !value.trim()) return false;
+  if (isProviderKind(value)) return true;
+  const parsed = parseProviderId(value);
+  return isProviderKind(parsed.kind) && value.startsWith(`${parsed.kind}-`);
 }
 
 export const PROVIDER_LOGOS: Record<ProviderKind, string> = {
   "Claude": "claude-logo.png",
   "Codex": "codex-logo.png",
-  "OpenCode Go": "opencode-logo.png"
+  "OpenCode Go": "opencode-logo.png",
+  "Cursor": "cursor-logo.png",
+  "Antigravity": "antigravity-logo.png"
 };
+
+export function parseProviderId(raw: string): ProviderID {
+  for (const kind of ALL_PROVIDER_KINDS) {
+    if (raw === kind) {
+      return { kind, slug: undefined, id: kind, displayName: kind };
+    }
+    const prefix = `${kind}-`;
+    if (raw.startsWith(prefix)) {
+      const extracted = raw.slice(prefix.length);
+      const slug = extracted || undefined;
+      return {
+        kind,
+        slug,
+        id: raw,
+        displayName: slug ? `${kind} (${slug})` : kind
+      };
+    }
+  }
+  return { kind: "Claude", slug: undefined, id: raw, displayName: raw };
+}
 
 export function providerShortLabel(kind: ProviderKind): string {
   return kind === "OpenCode Go" ? "Go" : kind;

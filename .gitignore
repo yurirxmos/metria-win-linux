@@ -5,3 +5,4 @@ release/
 .env*
 !.env.example
 .wrangler/
+.superpowers/
