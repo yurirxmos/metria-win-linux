@@ -158,13 +158,7 @@ export class AntigravityProvider {
   }
 
   async fetchWsl(shell: WslShell, distro: string): Promise<ProviderUsage> {
-    let output = "";
-    try {
-      output = await shell.readFile(distro, ".local/bin/agy");
-    } catch {
-      // ignore
-    }
-    const raw = (await (shell as any).execCommand?.(distro, "agy -p /usage </dev/null")) ?? output;
+    const raw = await shell.execCommand(distro, "agy -p /usage </dev/null");
     const windows = parseAntigravityWindows(raw);
     if (windows.length === 0) throw new Error("No usage data returned from WSL Antigravity.");
     return {

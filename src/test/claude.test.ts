@@ -391,7 +391,7 @@ test("ClaudeProvider fetchWsl fetches usage and handles WSL relative paths and e
   const provider = new ClaudeProvider(profile);
   const mockShell: WslShell = {
     distros: async () => ["Ubuntu"],
-    presence: async () => ({ codex: false, openCode: false, claude: true }),
+    presence: async () => ({ codex: false, openCode: false, claude: true, antigravity: false }),
     readFile: async (distro: string, relPath: string) => {
       assert.equal(distro, "Ubuntu");
       assert.equal(relPath, ".claude-work/.credentials.json");
@@ -402,7 +402,8 @@ test("ClaudeProvider fetchWsl fetches usage and handles WSL relative paths and e
         }
       });
     },
-    newestJsonl: async () => undefined
+    newestJsonl: async () => undefined,
+    execCommand: async () => ""
   };
 
   const originalFetch = globalThis.fetch;

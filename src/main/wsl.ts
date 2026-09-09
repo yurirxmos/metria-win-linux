@@ -5,12 +5,13 @@ export interface WslProviderPresence {
   codex: boolean;
   openCode: boolean;
   claude: boolean;
+  antigravity: boolean;
 }
 
 const WSL_TIMEOUT_MS = 20_000;
 
 export interface WslExec {
-  (command: string, args: string[], options?: { encoding: "buffer"; input?: string }): Promise<{ stdout: string | Buffer }>;
+  (command: string, args: string[], options?: { encoding: "buffer"; input?: string; timeoutMs?: number }): Promise<{ stdout: string | Buffer }>;
 }
 
 export interface WslShell {
@@ -18,10 +19,11 @@ export interface WslShell {
   presence(distro: string): Promise<WslProviderPresence>;
   readFile(distro: string, homeRelativePath: string): Promise<string>;
   newestJsonl(distro: string, homeRelativeDir: string): Promise<string | undefined>;
+  execCommand(distro: string, cmd: string, timeoutMs?: number): Promise<string>;
 }
 
 const PROBE_SCRIPT = [
-  'for f in codex_auth:"$HOME/.codex/auth.json" codex_sessions:"$HOME/.codex/sessions" opencode:"$HOME/.local/share/opencode/auth.json" claude:"$HOME/.claude/.credentials.json"; do',
+  'for f in codex_auth:"$HOME/.codex/auth.json" codex_sessions:"$HOME/.codex/sessions" opencode:"$HOME/.local/share/opencode/auth.json" claude:"$HOME/.claude/.credentials.json" antigravity:"$HOME/.local/bin/agy"; do',
   '  name="${f%%:*}"; target="${f#*:}"',
   '  if [ -e "$target" ]; then echo "$name"; fi',
   "done",
@@ -44,7 +46,7 @@ export function makeWslShell(options: { platform?: NodeJS.Platform; exec?: WslEx
   }
 
   async function presence(distro: string): Promise<WslProviderPresence> {
-    if (platform !== "win32") return { codex: false, openCode: false, claude: false };
+    if (platform !== "win32") return { codex: false, openCode: false, claude: false, antigravity: false };
     const cached = results.get(distro);
     if (cached && Date.now() - cached.at < PRESENCE_CACHE_TTL_MS) return cached.presence;
     try {
@@ -53,12 +55,13 @@ export function makeWslShell(options: { platform?: NodeJS.Platform; exec?: WslEx
       const presence: WslProviderPresence = {
         codex: hits.includes("codex_auth") || hits.includes("codex_sessions"),
         openCode: hits.includes("opencode"),
-        claude: hits.includes("claude")
+        claude: hits.includes("claude"),
+        antigravity: hits.includes("antigravity")
       };
       results.set(distro, { at: Date.now(), presence });
       return presence;
     } catch {
-      return { codex: false, openCode: false, claude: false };
+      return { codex: false, openCode: false, claude: false, antigravity: false };
     }
   }
 
@@ -81,7 +84,12 @@ export function makeWslShell(options: { platform?: NodeJS.Platform; exec?: WslEx
     }
   }
 
-  return { distros, presence, readFile, newestJsonl };
+  async function execCommand(distro: string, cmd: string, timeoutMs?: number): Promise<string> {
+    const stdout = await exec("wsl.exe", ["-d", distro, "sh", "-c", cmd], { encoding: "buffer", timeoutMs });
+    return decodeWslOutput(stdout.stdout);
+  }
+
+  return { distros, presence, readFile, newestJsonl, execCommand };
 }
 
 /** wsl.exe prints UTF-16LE (without a BOM) when its stdout is piped, while
@@ -94,14 +102,14 @@ export function decodeWslOutput(output: string | Buffer): string {
   return output.toString(isUtf16 ? "utf16le" : "utf8");
 }
 
-function wslExec(command: string, args: string[], options?: { encoding: "buffer"; input?: string }): Promise<{ stdout: string | Buffer }> {
+function wslExec(command: string, args: string[], options?: { encoding: "buffer"; input?: string; timeoutMs?: number }): Promise<{ stdout: string | Buffer }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    const timeout = setTimeout(() => { child.kill(); reject(new Error("WSL command timed out.")); }, WSL_TIMEOUT_MS);
+    const timeout = setTimeout(() => { child.kill(); reject(new Error("WSL command timed out.")); }, options?.timeoutMs ?? WSL_TIMEOUT_MS);
     child.on("error", (error) => { clearTimeout(timeout); reject(error); });
     child.on("close", (code) => {
       clearTimeout(timeout);

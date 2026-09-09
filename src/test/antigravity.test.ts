@@ -199,12 +199,20 @@ test("AntigravityProvider hasHostCredentials and fetchHost behavior", async () =
     assert.equal(usage.windows[1].percent, 50);
 
     // fetchWsl with mock execCommand
+    let executedDistro = "";
+    let executedCmd = "";
     const mockWslShell = {
       readFile: async () => "",
-      execCommand: async () => sample
+      execCommand: async (distro: string, cmd: string) => {
+        executedDistro = distro;
+        executedCmd = cmd;
+        return sample;
+      }
     } as unknown as WslShell;
 
     const wslUsage = await provider.fetchWsl(mockWslShell, "Ubuntu");
+    assert.equal(executedDistro, "Ubuntu");
+    assert.equal(executedCmd, "agy -p /usage </dev/null");
     assert.equal(wslUsage.id, "Antigravity");
     assert.equal(wslUsage.windows.length, 2);
   } finally {
@@ -235,4 +243,13 @@ test("AntigravityProvider error handling", async () => {
   } finally {
     process.env.PATH = originalEnvPath;
   }
+
+  // fetchWsl error handling
+  const emptyWslShell = {
+    execCommand: async () => ""
+  } as unknown as WslShell;
+  await assert.rejects(
+    () => provider.fetchWsl(emptyWslShell, "Ubuntu"),
+    /No usage data returned from WSL Antigravity/
+  );
 });
