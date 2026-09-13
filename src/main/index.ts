@@ -3,6 +3,7 @@ import { autoUpdater } from "electron-updater";
 import { dirname, join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { ALL_PROVIDER_KINDS, CARD_WIDTH, isProviderKind, isValidProviderId, parseProviderId, PROVIDER_LOGOS, providerShortLabel, WIDGET_ITEM_GAP, WIDGET_ITEM_HEIGHT, WIDGET_PADDING, WIDGET_WIDTH } from "../shared/types";
+import { getTranslations, resolveLocale, SupportedLocale } from "../shared/i18n";
 import { ProviderService } from "./providers";
 import { SettingsStore } from "./settings";
 import { buildReconnectCommand, diagnoseProvider } from "./diagnostics";
@@ -23,6 +24,10 @@ let updateTimer: NodeJS.Timeout | undefined;
 let pendingOpenSettings = false;
 const settings = new SettingsStore();
 const providers = new ProviderService(() => settings.load());
+
+function currentLocale(): SupportedLocale {
+  return resolveLocale(settings.load().locale, app.getLocale());
+}
 
 function createWindow(): BrowserWindow {
   const next = new BrowserWindow({
@@ -262,11 +267,17 @@ function positionCard(index: number, height?: number): void {
 }
 
 interface UsageRow { name: string; percent: number; reset: string; logo: string; }
-function formatReset(resetDate: string | null): string {
+function formatReset(resetDate: string | null, locale: SupportedLocale = currentLocale()): string {
   if (!resetDate) return "";
   const seconds = (new Date(resetDate).getTime() - Date.now()) / 1000;
-  if (seconds > 0 && seconds < 86400) { const totalMinutes = Math.floor(seconds / 60); const hours = Math.floor(totalMinutes / 60); const minutes = totalMinutes % 60; return hours > 0 ? (minutes > 0 ? `${hours} hr ${minutes} min` : `${hours} hr`) : `${minutes} min`; }
-  return new Date(resetDate).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  if (seconds > 0 && seconds < 86400) {
+    const totalMinutes = Math.floor(seconds / 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (locale === "pt-BR") return hours > 0 ? (minutes > 0 ? `${hours} h ${minutes} min` : `${hours} h`) : `${minutes} min`;
+    return hours > 0 ? (minutes > 0 ? `${hours} hr ${minutes} min` : `${hours} hr`) : `${minutes} min`;
+  }
+  return new Date(resetDate).toLocaleDateString(locale, { weekday: "short", month: "short", day: "numeric" });
 }
 function findAsset(name: string): string | undefined {
   const candidates = app.isPackaged
@@ -280,28 +291,30 @@ function trayMenuIcon(name: string): Electron.NativeImage | undefined {
   return path ? nativeImage.createFromPath(path).resize({ width: 16, height: 16 }) : undefined;
 }
 function usageRows(providers: typeof lastUsage): UsageRow[] {
+  const locale = currentLocale();
   return visibleProviders(providers).filter((provider) => provider.windows[0]).map((provider) => {
     const parsed = parseProviderId(provider.id || provider.kind);
     const name = parsed.slug ? `${providerShortLabel(provider.kind)} (${parsed.slug})` : providerShortLabel(provider.kind);
     return {
       name,
       percent: Math.round(Math.max(0, Math.min(100, provider.windows[0]!.percent))),
-      reset: formatReset(provider.windows[0]!.resetDate),
+      reset: formatReset(provider.windows[0]!.resetDate, locale),
       logo: PROVIDER_LOGOS[provider.kind]
     };
   });
 }
 function buildTrayMenu(rows: UsageRow[]): Menu {
+  const t = getTranslations(currentLocale());
   const template: Electron.MenuItemConstructorOptions[] = rows.length
     ? rows.map((row) => ({ label: `${row.name} — ${row.percent}%${row.reset ? ` · ${row.reset}` : ""}`, enabled: false, icon: trayMenuIcon(row.logo) }))
-    : [{ label: "No usage data yet", enabled: false }];
+    : [{ label: t.tray.noUsageYet, enabled: false }];
   template.push({ type: "separator" });
-  template.push({ label: "Open dashboard", click: showDashboard });
-  template.push({ label: "Refresh", click: () => { void usage(); } });
-  if (updateState === "downloaded") template.push({ label: "Restart & install update", click: () => { autoUpdater.quitAndInstall(); } });
-  template.push({ label: "Check for updates…", click: () => { void autoUpdater.checkForUpdates().catch(() => undefined); } });
+  template.push({ label: t.tray.openDashboard, click: showDashboard });
+  template.push({ label: t.tray.refresh, click: () => { void usage(); } });
+  if (updateState === "downloaded") template.push({ label: t.tray.restartAndInstall, click: () => { autoUpdater.quitAndInstall(); } });
+  template.push({ label: t.tray.checkForUpdates, click: () => { void autoUpdater.checkForUpdates().catch(() => undefined); } });
   template.push({ type: "separator" });
-  template.push({ label: "Quit Metria Electron", click: () => { isQuitting = true; app.quit(); } });
+  template.push({ label: t.tray.quit, click: () => { isQuitting = true; app.quit(); } });
   return Menu.buildFromTemplate(template);
 }
 
@@ -323,15 +336,18 @@ function restartRefreshTimer(): void {
 }
 function updateTray(providers: typeof lastUsage): void {
   if (!tray) return;
+  const t = getTranslations(currentLocale());
   const rows = usageRows(providers);
   const summary = rows.map((row) => `${row.name} ${row.percent}%`).join(" · ");
-  const updated = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date());
-  tray.setToolTip(summary ? `${summary} · Updated ${updated}` : `Metria Electron · Updated ${updated}`);
+  const updated = new Intl.DateTimeFormat(currentLocale(), { hour: "2-digit", minute: "2-digit" }).format(new Date());
+  tray.setToolTip(summary ? `${summary} · ${t.tray.updated} ${updated}` : `Metria Electron · ${t.tray.updated} ${updated}`);
   tray.setContextMenu(buildTrayMenu(rows));
 }
 
 function broadcastSettings(): void {
   for (const target of [window, widgetWindow, cardWindow]) target?.webContents.send("metria:settings-changed");
+  updateTray(lastUsage);
+  updateBadges(lastUsage);
 }
 
 function recreateWidget(): void {
@@ -358,11 +374,12 @@ function updateTrayVisibility(): void {
 
 function showWidgetMenu(): void {
   if (!widgetWindow) return;
+  const t = getTranslations(currentLocale());
   Menu.buildFromTemplate([
-    { label: "Open dashboard", click: showDashboard },
-    { label: "Refresh", click: () => { void usage(); } },
-    { label: "Settings", click: showDashboardSettings },
-    { label: "Quit", click: quitApp }
+    { label: t.tray.openDashboard, click: showDashboard },
+    { label: t.tray.refresh, click: () => { void usage(); } },
+    { label: t.tray.settings, click: showDashboardSettings },
+    { label: t.tray.quit, click: quitApp }
   ]).popup({ window: widgetWindow });
 }
 
@@ -390,12 +407,13 @@ function createTray(): void {
  */
 function badgeStatus(provider: ProviderUsage): { percent: number; reset: string } {
   const first = provider.windows[0];
-  return { percent: Math.round(Math.max(0, Math.min(100, first?.percent ?? 0))), reset: formatReset(first?.resetDate ?? null) };
+  return { percent: Math.round(Math.max(0, Math.min(100, first?.percent ?? 0))), reset: formatReset(first?.resetDate ?? null, currentLocale()) };
 }
 function badgeTemplate(): Electron.MenuItemConstructorOptions[] {
+  const t = getTranslations(currentLocale());
   return [
-    { label: "Open dashboard", click: showDashboard },
-    { label: "Refresh", click: () => { void usage(); } }
+    { label: t.tray.openDashboard, click: showDashboard },
+    { label: t.tray.refresh, click: () => { void usage(); } }
   ];
 }
 function updateBadges(providers: typeof lastUsage): void {

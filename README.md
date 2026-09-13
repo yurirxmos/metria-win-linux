@@ -16,52 +16,58 @@
 ## Contents
 
 - [What it does](#what-it-does)
+- [Key features](#key-features)
+- [Supported providers](#supported-providers)
+- [Multilingual support](#multilingual-support)
 - [Download](#download)
-- [To do](#to-do)
-- [Providers](#providers)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Project layout](#project-layout)
+- [Architecture and security](#architecture-and-security)
 - [Contributing](#contributing)
 - [License](#license)
 
 ## What it does
 
-Metria shows current session and monthly usage percentages for supported AI providers.
+Metria shows real-time session quotas, rate limits, and monthly usage percentages for supported AI coding assistants.
 
-- **Usage widget**: a right-edge widget for provider usage cards.
-- **System tray**: compact access to provider usage and controls.
-- **Dashboard window**: detailed per-provider cards and usage gauges.
+- **Floating widget**: an unobtrusive edge widget for quick glances at active quotas.
+- **Notch card**: hoverable compact card showing quota progress bars and relative reset timers.
+- **System tray**: menu with per-provider usage stats, instant refresh, and settings controls.
+- **Dashboard window**: detailed per-provider breakdown cards, source selection, and diagnostics.
 
-The app stores its settings in its own `com.metria.electron` application-data namespace.
+The app stores settings in its own `com.metria.electron` application-data namespace.
 
-## Download
+## Key features
 
-Download the installer for your operating system from the [GitHub Releases](https://github.com/yurirxmos/metria-win-linux/releases) page.
+- **Multi-provider tracking**: Monitor Claude, Cursor, Antigravity, Codex, and OpenCode Go simultaneously.
+- **Claude multi-profile discovery**: Automatically detects and separately tracks usage for multiple Claude profiles on the host and WSL.
+- **Zero runtime dependencies**: Native SQLite parsing, CLI process execution, and typed isomorphic i18n with zero new third-party runtime libraries.
+- **Multilingual internationalization**: Built-in support for English (`en-US`) and Brazilian Portuguese (`pt-BR`).
+- **WSL integration**: Discovers and reads provider credentials across installed WSL Linux distributions on Windows.
+- **Rate-limit resilience**: Exponential backoff and retry handling for provider APIs.
 
-- **Windows**: `.exe` installer.
-- **Linux**: `.AppImage` package.
+## Supported providers
 
-Electron releases are unsigned. Windows SmartScreen may display a warning during installation.
+Providers are enabled automatically when their local credentials or binaries are detected. Providers that are not configured remain accessible in Settings with diagnostics and reconnection commands.
 
-## To do
+- **Claude**: Credentials read from `~/.claude/.credentials.json` on Unix and the equivalent host or WSL location on Windows. Scans `~/.claude/` to discover and track multiple custom profiles independently.
+- **Cursor**: Reads authentication tokens directly from local SQLite database (`state.vscdb`) using Node's native `node:sqlite`. Queries `/aiserver.v1.DashboardService/GetUsage` via Connect-RPC with automatic JWT expiration checks and HTTP 429 backoff retry.
+- **Antigravity (AGY)**: Executes the local `agy` CLI (`agy status`) across system `$PATH` and standard install directories (`%LOCALAPPDATA%\Programs\Antigravity`, `/usr/local/bin`, `~/.local/bin`) with process watchdog timeout protection.
+- **Codex**: Credentials and latest session read from `CODEX_HOME`/`~/.codex`, including WSL locations on Windows.
+- **OpenCode Go**: Credentials read from `XDG_DATA_HOME`/`~/.local/share/opencode/auth.json` on Unix, `%APPDATA%` on Windows, or the WSL path.
 
-- Improve Metria compatibility and runtime support for Windows and Linux.
-- Add usage-aware sounds and animations.
+Credentials are never committed or sent to external third parties. Metria reads them strictly at runtime from documented local system sources.
 
-## Providers
+## Multilingual support
 
-Providers are enabled automatically when their local credentials or usage files are detected. Providers that are not installed remain available in Settings with setup guidance.
+Metria features an isomorphic translation engine with compile-time type safety:
 
-- **Claude**: credentials read from `~/.claude/.credentials.json` on Unix and from the equivalent host or WSL location on Windows.
-- **Codex**: credentials and the newest session read from `CODEX_HOME`/`~/.codex`, including WSL locations on Windows.
-- **OpenCode Go**: credentials read from `XDG_DATA_HOME`/`~/.local/share/opencode/auth.json` on Unix, `%APPDATA%` on Windows, or the WSL path.
-
-Providers are discovered on the host filesystem and, on Windows, in installed WSL distributions. These read-only locations are fixture-tested, not runtime-tested on every supported platform.
-
-Credentials are never committed. Metria reads them at runtime from the documented local sources.
-
-## Mobile PWA
+- **Supported languages**: English (`en-US`) and Brazilian Portuguese (`pt-BR`).
+- **Auto-detection**: Automatically resolves system language preference via `app.getLocale()` in the Main process and `navigator.language` in the Renderer, defaulting non-Portuguese environments to English.
+- **Language selector**: Allows manual override under Settings > Display.
+- **Full coverage**: Localizes System Tray menus, tooltips, dock/tray badges, dashboard cards, modal dialogs, and relative reset countdowns (*"Reinicia em 2 h 15 min"* / *"Resets in 2 hr 15 min"*).
+- **Data integrity**: Canonical provider identifiers and storage keys remain invariant, translating strictly at the presentation layer.
 
 This version does not include phone pairing, the local PWA server, QR pairing, or mobile alerts. Those features belong to the native macOS application.
 
@@ -106,13 +112,13 @@ The updater uses the dedicated `electron-latest` channel in this repository.
 
 ## Project layout
 
-- `src/main/`: provider files, network calls, settings, tray, windows, and IPC.
-- `src/preload/`: the typed `window.metria` context bridge.
-- `src/renderer/`: sandboxed React dashboard, widget, and usage card.
-- `src/shared/`: shared TypeScript types and provider presentation helpers.
-- `src/test/`: provider, path, and WSL fixture tests.
+- `src/main/`: Electron main process, provider implementations, settings, tray, window management, and IPC handlers.
+- `src/preload/`: Typed `window.metria` context bridge.
+- `src/renderer/`: React dashboard, settings modal, widget, and notch card.
+- `src/shared/`: Shared TypeScript types, presenter helpers, and isomorphic translation dictionaries (`src/shared/i18n/`).
+- `src/test/`: Unit test suites for providers, settings, WSL probing, and i18n translations.
 - `resources/`: Electron icons and bundled provider assets.
-- `.github/workflows/electron-release.yml`: Windows/Linux release automation.
+- `.github/workflows/electron-release.yml`: Windows and Linux release automation.
 
 ## Architecture and security
 

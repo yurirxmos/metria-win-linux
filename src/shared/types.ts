@@ -20,6 +20,8 @@ export interface ProviderUsage {
 export type WidgetPosition = "top" | "bottom" | "left" | "right";
 export type WidgetSize = "small" | "medium" | "large";
 export type WidgetBehavior = "pinned" | "auto-hide";
+export type SupportedLocale = "en-US" | "pt-BR";
+export type LocaleChoice = "system" | "en-US" | "pt-BR";
 
 export interface AlertSettings {
   enabled: boolean;
@@ -44,6 +46,7 @@ export interface AppSettings {
   widgetSize: WidgetSize;
   widgetOpacity: number;
   widgetDisplayId: string | null;
+  locale: LocaleChoice;
   providerSource: Partial<Record<string, ProviderSourceChoice>>;
   hiddenUsageWindowTitles: Partial<Record<string, string[]>>;
   alerts: AlertSettings;
@@ -70,7 +73,7 @@ export interface MetriaApi {
   setProviderEnabled(kind: ProviderKind | string, enabled: boolean): Promise<AppSettings>;
   reconnect(kind: ProviderKind | string): Promise<{ command: string; message: string }>;
   setWidgetYOffset(offsetY: number): Promise<AppSettings>;
-  setWidgetPreferences(preferences: Partial<Pick<AppSettings, "showWidget" | "showTray" | "showAccountLabels" | "widgetBehavior" | "widgetPosition" | "widgetSize" | "widgetOpacity" | "widgetDisplayId" | "alerts">>): Promise<AppSettings>;
+  setWidgetPreferences(preferences: Partial<Pick<AppSettings, "showWidget" | "showTray" | "showAccountLabels" | "widgetBehavior" | "widgetPosition" | "widgetSize" | "widgetOpacity" | "widgetDisplayId" | "alerts" | "locale">>): Promise<AppSettings>;
   setWindowVisible(kind: ProviderKind | string, title: string, visible: boolean): Promise<AppSettings>;
   diagnose(kind: ProviderKind | string): Promise<string>;
   getLoginItemStatus(): Promise<LoginItemStatus>;
