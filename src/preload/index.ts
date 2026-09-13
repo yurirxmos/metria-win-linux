@@ -14,12 +14,12 @@ const api: MetriaApi = {
   onCardShow: (callback: (payload: CardShowPayload) => void) => { ipcRenderer.on("metria:card-show", (_event, payload: CardShowPayload) => callback(payload)); },
   onCardHide: (callback: () => void) => { ipcRenderer.on("metria:card-hide", () => callback()); },
   getSettings: () => ipcRenderer.invoke("metria:get-settings"),
-  setProviderEnabled: (kind: ProviderKind, enabled: boolean) => ipcRenderer.invoke("metria:set-provider-enabled", kind, enabled),
-  reconnect: (kind: ProviderKind) => ipcRenderer.invoke("metria:reconnect", kind),
+  setProviderEnabled: (kind: ProviderKind | string, enabled: boolean) => ipcRenderer.invoke("metria:set-provider-enabled", kind, enabled),
+  reconnect: (kind: ProviderKind | string) => ipcRenderer.invoke("metria:reconnect", kind),
   setWidgetYOffset: (offsetY: number) => ipcRenderer.invoke("metria:set-widget-y-offset", offsetY),
   setWidgetPreferences: (preferences) => ipcRenderer.invoke("metria:set-widget-preferences", preferences),
   setWindowVisible: (kind, title, visible) => ipcRenderer.invoke("metria:set-window-visible", kind, title, visible),
-  diagnose: (kind) => ipcRenderer.invoke("metria:diagnose", kind),
+  diagnose: (kind: ProviderKind | string) => ipcRenderer.invoke("metria:diagnose", kind),
   getLoginItemStatus: () => ipcRenderer.invoke("metria:get-login-item-status"),
   setLaunchAtLogin: (enabled: boolean) => ipcRenderer.invoke("metria:set-launch-at-login", enabled),
   getAppInfo: () => ipcRenderer.invoke("metria:app-info"),
@@ -30,7 +30,7 @@ const api: MetriaApi = {
   quit: () => ipcRenderer.invoke("metria:quit"),
   setRefreshInterval: (seconds: number) => ipcRenderer.invoke("metria:set-refresh-interval", seconds),
   getProviderSources: () => ipcRenderer.invoke("metria:get-provider-sources"),
-  setProviderSource: (kind: ProviderKind, source: ProviderSourceChoice) => ipcRenderer.invoke("metria:set-provider-source", kind, source)
+  setProviderSource: (kind: ProviderKind | string, source: ProviderSourceChoice) => ipcRenderer.invoke("metria:set-provider-source", kind, source)
 };
 
 contextBridge.exposeInMainWorld("metria", Object.freeze(api));

@@ -2,9 +2,10 @@ import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, shell, Tray } f
 import { autoUpdater } from "electron-updater";
 import { dirname, join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { ALL_PROVIDER_KINDS, CARD_WIDTH, isProviderKind, PROVIDER_LOGOS, providerShortLabel, WIDGET_ITEM_GAP, WIDGET_ITEM_HEIGHT, WIDGET_PADDING, WIDGET_WIDTH } from "../shared/types";
+import { ALL_PROVIDER_KINDS, CARD_WIDTH, isProviderKind, isValidProviderId, parseProviderId, PROVIDER_LOGOS, providerShortLabel, WIDGET_ITEM_GAP, WIDGET_ITEM_HEIGHT, WIDGET_PADDING, WIDGET_WIDTH } from "../shared/types";
 import { ProviderService } from "./providers";
 import { SettingsStore } from "./settings";
+import { buildReconnectCommand, diagnoseProvider } from "./diagnostics";
 import type { AppSettings, ProviderKind, ProviderSourceChoice, ProviderUsage } from "../shared/types";
 
 let window: BrowserWindow | undefined;
@@ -16,7 +17,7 @@ let tray: Tray | undefined;
 let refreshTimer: NodeJS.Timeout | undefined;
 let isQuitting = false;
 let lastUsage: Awaited<ReturnType<ProviderService["fetch"]>> = [];
-let badgeTrays = new Map<ProviderKind, Tray>();
+let badgeTrays = new Map<string, Tray>();
 let updateState: "idle" | "downloaded" = "idle";
 let updateTimer: NodeJS.Timeout | undefined;
 let pendingOpenSettings = false;
@@ -152,8 +153,7 @@ function createWidgetWindow(): BrowserWindow {
 }
 function updateWidgetBounds(values: typeof lastUsage): void {
   if (!widgetWindow) return;
-  const enabled = settings.load().enabledProviders;
-  const count = values.filter((provider) => enabled.includes(provider.kind)).length;
+  const count = visibleProviders(values).length;
   const bounds = widgetBounds(displayArea(), count);
   widgetWindow.setBounds(bounds);
   widgetWindow.setShape(widgetShape(bounds, settings.load().widgetPosition));
@@ -163,9 +163,15 @@ function updateWidgetBounds(values: typeof lastUsage): void {
 /** Hover card shown to the left of the widget while pointing at a provider. */
 const CARD_SPACING = 12;
 
-function visibleProviders(): typeof lastUsage {
-  const enabled = settings.load().enabledProviders;
-  return lastUsage.filter((provider) => enabled.includes(provider.kind));
+export function visibleProviders(
+  providers: typeof lastUsage = lastUsage,
+  enabled: string[] = settings.load().enabledProviders
+): typeof lastUsage {
+  return providers.filter(
+    (provider) =>
+      enabled.includes(provider.id) ||
+      (provider.id === provider.kind && enabled.includes(provider.kind))
+  );
 }
 
 function createCardWindow(): BrowserWindow {
@@ -274,13 +280,16 @@ function trayMenuIcon(name: string): Electron.NativeImage | undefined {
   return path ? nativeImage.createFromPath(path).resize({ width: 16, height: 16 }) : undefined;
 }
 function usageRows(providers: typeof lastUsage): UsageRow[] {
-  const enabled = settings.load().enabledProviders;
-  return providers.filter((provider) => enabled.includes(provider.kind) && provider.windows[0]).map((provider) => ({
-    name: providerShortLabel(provider.kind),
-    percent: Math.round(Math.max(0, Math.min(100, provider.windows[0]!.percent))),
-    reset: formatReset(provider.windows[0]!.resetDate),
-    logo: PROVIDER_LOGOS[provider.kind]
-  }));
+  return visibleProviders(providers).filter((provider) => provider.windows[0]).map((provider) => {
+    const parsed = parseProviderId(provider.id || provider.kind);
+    const name = parsed.slug ? `${providerShortLabel(provider.kind)} (${parsed.slug})` : providerShortLabel(provider.kind);
+    return {
+      name,
+      percent: Math.round(Math.max(0, Math.min(100, provider.windows[0]!.percent))),
+      reset: formatReset(provider.windows[0]!.resetDate),
+      logo: PROVIDER_LOGOS[provider.kind]
+    };
+  });
 }
 function buildTrayMenu(rows: UsageRow[]): Menu {
   const template: Electron.MenuItemConstructorOptions[] = rows.length
@@ -390,15 +399,18 @@ function badgeTemplate(): Electron.MenuItemConstructorOptions[] {
   ];
 }
 function updateBadges(providers: typeof lastUsage): void {
-  const enabled = settings.load().enabledProviders;
-  const active = providers.filter((provider) => enabled.includes(provider.kind) && provider.available);
-  for (const [kind, badge] of badgeTrays) {
-    if (!active.some((provider) => provider.kind === kind)) { badge.destroy(); badgeTrays.delete(kind); }
+  const active = visibleProviders(providers).filter((provider) => provider.available);
+  for (const [id, badge] of badgeTrays) {
+    if (!active.some((provider) => (provider.id || provider.kind) === id)) {
+      badge.destroy();
+      badgeTrays.delete(id);
+    }
   }
   for (const provider of active) {
+    const id = provider.id || provider.kind;
     const { percent, reset } = badgeStatus(provider);
-    const tooltip = `${providerShortLabel(provider.kind)} — ${percent}%${reset ? ` · ${reset}` : ""}`;
-    const existing = badgeTrays.get(provider.kind);
+    const tooltip = `${parseProviderId(id).displayName} — ${percent}%${reset ? ` · ${reset}` : ""}`;
+    const existing = badgeTrays.get(id);
     if (existing) {
       existing.setToolTip(tooltip);
       continue;
@@ -408,7 +420,7 @@ function updateBadges(providers: typeof lastUsage): void {
     badge.setToolTip(tooltip);
     badge.setContextMenu(Menu.buildFromTemplate(badgeTemplate()));
     badge.on("click", showDashboard);
-    badgeTrays.set(provider.kind, badge);
+    badgeTrays.set(id, badge);
   }
 }
 
@@ -430,8 +442,9 @@ function requireTrustedSender(event: Electron.IpcMainInvokeEvent): void {
 // The dashboard must show every provider (enabled or not) so users can re-enable
 // from there; taps, badges, and the widget keep filtering by enabledProviders.
 async function usage() {
-  const values = (await providers.fetch(ALL_PROVIDER_KINDS)).map((value) => {
-    const cached = lastUsage.find((entry) => entry.kind === value.kind);
+  const targets = providers.getProviders().map((p) => p.id);
+  const values = (await providers.fetch(targets)).map((value) => {
+    const cached = lastUsage.find((entry) => entry.id === value.id) ?? (value.id === value.kind ? lastUsage.find((entry) => entry.kind === value.kind) : undefined);
     return value.error && cached?.windows.length ? { ...value, accountLabel: value.accountLabel ?? cached.accountLabel, windows: cached.windows, updatedAt: cached.updatedAt } : value;
   });
   lastUsage = values;
@@ -444,13 +457,38 @@ function cachePath(): string { return join(app.getPath("userData"), "usage-cache
 function loadCachedUsage(): ProviderUsage[] {
   try {
     const parsed = JSON.parse(readFileSync(cachePath(), "utf8")) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((value): value is ProviderUsage => typeof value === "object" && value !== null && isProviderKind((value as ProviderUsage).kind) && Array.isArray((value as ProviderUsage).windows)).map((value) => ({ ...value, error: null, available: true })) : [];
-  } catch { return []; }
+    return Array.isArray(parsed)
+      ? parsed
+          .filter(
+            (value): value is ProviderUsage =>
+              typeof value === "object" &&
+              value !== null &&
+              isProviderKind((value as ProviderUsage).kind) &&
+              Array.isArray((value as ProviderUsage).windows)
+          )
+          .map((value) => ({
+            ...value,
+            id: (value as any).id || (value as ProviderUsage).kind,
+            error: null,
+            available: true
+          }))
+      : [];
+  } catch {
+    return [];
+  }
 }
 function saveCachedUsage(values: ProviderUsage[]): void {
   try {
     mkdirSync(join(app.getPath("userData")), { recursive: true });
-    const cached = values.filter((value) => value.windows.length).map(({ kind, accountLabel, windows, updatedAt }) => ({ kind, accountLabel, windows, updatedAt }));
+    const cached = values
+      .filter((value) => value.windows.length)
+      .map((value) => ({
+        id: value.id || value.kind,
+        kind: value.kind,
+        accountLabel: value.accountLabel,
+        windows: value.windows,
+        updatedAt: value.updatedAt
+      }));
     const temporary = `${cachePath()}.tmp`;
     writeFileSync(temporary, JSON.stringify(cached, null, 2), { mode: 0o600 });
     renameSync(temporary, cachePath());
@@ -514,18 +552,19 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   ipcMain.handle("metria:refresh", (event) => { requireTrustedSender(event); return usage(); });
   ipcMain.handle("metria:get-settings", (event) => { requireTrustedSender(event); return settings.load(); });
   ipcMain.handle("metria:set-provider-enabled", (event, kind: unknown, enabled: unknown) => {
-    requireTrustedSender(event); if (!isProviderKind(kind) || typeof enabled !== "boolean") throw new Error("Invalid provider setting.");
+    requireTrustedSender(event); if (!isValidProviderId(kind) || typeof enabled !== "boolean") throw new Error("Invalid provider setting.");
     const next = settings.setProviderEnabled(kind, enabled);
     // The widget (notch) keeps its own settings snapshot; refresh it and the bounds now.
     updateWidgetBounds(lastUsage);
     broadcastSettings();
     return next;
   });
-  ipcMain.handle("metria:reconnect", async (event, kind: unknown) => {
-    requireTrustedSender(event); if (!isProviderKind(kind)) throw new Error("Invalid provider.");
-    const command = kind === "Claude" ? "claude auth login" : kind === "Codex" ? "codex login" : "opencode auth login";
+  ipcMain.handle("metria:reconnect", async (event, rawId: unknown) => {
+    requireTrustedSender(event);
+    if (!isValidProviderId(rawId)) throw new Error("Invalid provider.");
+    const { command, message } = buildReconnectCommand(String(rawId));
     await shell.openPath(app.getPath("home"));
-    return { command, message: `Run \`${command}\` in your terminal, then refresh Metria.` };
+    return { command, message };
   });
   ipcMain.handle("metria:set-widget-y-offset", (event, offsetY: unknown) => {
     requireTrustedSender(event);
@@ -554,17 +593,23 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   });
   ipcMain.handle("metria:set-window-visible", (event, kind: unknown, title: unknown, visible: unknown) => {
     requireTrustedSender(event);
-    if (!isProviderKind(kind) || typeof title !== "string" || !title || typeof visible !== "boolean") throw new Error("Invalid usage window setting.");
+    if (!isValidProviderId(kind) || typeof title !== "string" || !title || typeof visible !== "boolean") throw new Error("Invalid usage window setting.");
     const next = settings.setWindowVisible(kind, title, visible);
     broadcastSettings();
     return next;
   });
-  ipcMain.handle("metria:diagnose", async (event, kind: unknown) => {
+  ipcMain.handle("metria:diagnose", async (event, rawId: unknown) => {
     requireTrustedSender(event);
-    if (!isProviderKind(kind)) throw new Error("Invalid provider.");
-    const info = (await providers.sources([kind]))[0];
-    const usage = lastUsage.find((entry) => entry.kind === kind);
-    return [info.host ? "Host credentials detected." : "No host credentials detected.", info.wsl.filter((entry) => entry.present).map((entry) => `WSL ${entry.distro} data detected.`).join(" "), usage ? `${usage.windows.length} usage window(s) returned.` : "Metria has not received usage data yet.", usage?.updatedAt ? `Last update: ${new Date(usage.updatedAt).toLocaleString()}` : "", usage?.error ? `Latest issue: ${usage.error}` : ""].filter(Boolean).join("\n");
+    if (!isValidProviderId(rawId)) throw new Error("Invalid provider.");
+    const parsed = parseProviderId(String(rawId));
+    const info = (await providers.sources([parsed.id]))[0];
+    const usage = lastUsage.find((entry) => entry.id === parsed.id) ?? (parsed.id === parsed.kind ? lastUsage.find((entry) => entry.kind === parsed.kind) : undefined);
+    return diagnoseProvider({
+      providerId: parsed.id,
+      sourceInfo: info,
+      usage,
+      paths: providers.paths
+    });
   });
   ipcMain.handle("metria:get-login-item-status", (event) => { requireTrustedSender(event); return loginItemStatus(); });
   ipcMain.handle("metria:app-info", (event) => {
@@ -623,11 +668,11 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   });
   ipcMain.handle("metria:get-provider-sources", (event) => {
     requireTrustedSender(event);
-    return providers.sources(ALL_PROVIDER_KINDS);
+    return providers.sources(providers.getProviders().map((p) => p.id));
   });
   ipcMain.handle("metria:set-provider-source", (event, kind: unknown, source: unknown) => {
     requireTrustedSender(event);
-    if (!isProviderKind(kind) || !validProviderSource(source)) throw new Error("Invalid provider source.");
+    if (!isValidProviderId(kind) || !validProviderSource(source)) throw new Error("Invalid provider source.");
     const next = settings.setProviderSource(kind, source);
     updateWidgetBounds(lastUsage);
     widgetWindow?.webContents.send("metria:settings-changed");
